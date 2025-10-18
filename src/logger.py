@@ -44,7 +44,9 @@ class ParquetLogbook:
         filename = os.path.join(
             ds_path, f"part-{int(datetime.now().timestamp() * 1e6)}.parquet"
         )
-        pq.write_table(pa.Table.from_pylist(rows), filename)
+        # Avoid dictionary encoding to reduce schema drift across parts
+        tbl = pa.Table.from_pylist(rows)
+        pq.write_table(tbl, filename, use_dictionary=False)
 
     # Public APIs
     def append_market_snapshot(self, rows: List[Dict[str, Any]]) -> None:

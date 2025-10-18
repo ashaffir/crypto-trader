@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   bot:
     build:
@@ -10,10 +8,12 @@ services:
       - ENV=dev
       - LOGBOOK_DIR=/app/data/logbook
       - CONFIG_PATH=/app/configs/config.yaml
+      - CONTROL_DIR=/app/data/control
     volumes:
       - ./configs:/app/configs:ro
       - ./data/logbook:/app/data/logbook
-    command: ["python", "-m", "src.app"]
+      - ./data/control:/app/data/control
+    command: ["python", "-m", "src.supervisor"]
     restart: unless-stopped
 
   ui:
@@ -23,8 +23,10 @@ services:
     image: binance-spot-signal-ui:latest
     environment:
       - LOGBOOK_DIR=/app/data/logbook
+      - CONTROL_DIR=/app/data/control
     volumes:
       - ./data/logbook:/app/data/logbook:ro
+      - ./data/control:/app/data/control
       - ./ui:/app/ui:ro
     command: ["streamlit", "run", "ui/ui_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:

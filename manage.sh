@@ -58,7 +58,7 @@ run_cmd() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 detect_dc() {
-  # Determine docker compose CLI
+  # Determine docker compose CLI (prefer modern 'docker compose')
   local dc_cmd=""
   if [[ -n "$FORCE_DOCKER_TOOL" ]]; then
     case "$FORCE_DOCKER_TOOL" in
@@ -66,12 +66,18 @@ detect_dc() {
       docker-compose) dc_cmd="docker-compose" ;;
       *) die "Unknown FORCE_DOCKER_TOOL=$FORCE_DOCKER_TOOL" ;;
     esac
-  elif have docker && docker compose version >/dev/null 2>&1; then
-    dc_cmd="docker compose"
-  elif have docker-compose && docker-compose version >/dev/null 2>&1; then
-    dc_cmd="docker-compose"
   else
-    dc_cmd=""  # not found
+    # Prefer legacy docker-compose first for environments without plugin
+    if have docker-compose && docker-compose version >/dev/null 2>&1; then
+      dc_cmd="docker-compose"
+    elif have docker && docker compose version >/dev/null 2>&1; then
+      dc_cmd="docker compose"
+    elif have docker && docker --help 2>&1 | grep -q "compose"; then
+      # Older docker may not support 'docker compose version' but has plugin
+      dc_cmd="docker compose"
+    else
+      dc_cmd=""
+    fi
   fi
 
   if [[ -z "$dc_cmd" ]]; then
@@ -104,16 +110,38 @@ dc() {
 list_services() {
   # Prefer compose to list services; if unavailable, attempt to parse YAML minimally.
   if [[ -n "$DC_BASE" ]] || have docker || have docker-compose; then
+    # 1) Use our wrapper
     if services_out=$(dc config --services 2>/dev/null); then
-      printf "%s\n" "$services_out"
-      return 0
+      if [[ -n "$services_out" ]]; then
+        printf "%s\n" "$services_out"
+        return 0
+      fi
+    fi
+    # 2) Try legacy docker-compose explicitly
+    if have docker-compose; then
+      if services_out=$(docker-compose -f "$COMPOSE_FILE" config --services 2>/dev/null); then
+        if [[ -n "$services_out" ]]; then
+          printf "%s\n" "$services_out"
+          return 0
+        fi
+      fi
+    fi
+    # 3) Try docker compose plugin explicitly
+    if have docker; then
+      if services_out=$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null); then
+        if [[ -n "$services_out" ]]; then
+          printf "%s\n" "$services_out"
+          return 0
+        fi
+      fi
     fi
   fi
   # Fallback: naive YAML parse of service names under top-level 'services:'
   # Note: this is a simple heuristic; adequate for local self-test without docker.
   awk '
     $0 ~ /^services:/ {in_services=1; next}
-    in_services && match($0, /^[[:space:]]{2}([A-Za-z0-9_.-]+):/, m) {print m[1]}
+    # two leading spaces then key:
+    in_services && match($0, /^[[:space:]][[:space:]]([A-Za-z0-9_.-]+):/, m) {print m[1]}
     in_services && NF==0 {in_services=0}
   ' "$COMPOSE_FILE" 2>/dev/null || true
 }
@@ -133,21 +161,26 @@ confirm() {
 }
 
 choose_service() {
-  local services=("$(list_services | tr '\n' ' ')")
-  # word-split into array
-  # shellcheck disable=SC2206
-  services=(${services})
+  local services=()
+  while IFS= read -r svc; do
+    [[ -n "$svc" ]] && services+=("$svc")
+  done < <(list_services)
   if ((${#services[@]}==0)); then
     die "No services found in compose file: $COMPOSE_FILE"
   fi
-  notice "Select a service:"
-  select svc in "${services[@]}"; do
-    if [[ -n "${svc:-}" ]]; then
-      printf "%s" "$svc"
-      return 0
-    fi
-    warn "Invalid selection."
-  done
+  (
+    # Subshell: redirect menu and prompts to stderr; print selection to stdout
+    exec 3>&1
+    exec 1>&2
+    printf "Select a service:\n"
+    select svc in "${services[@]}"; do
+      if [[ -n "${svc:-}" ]]; then
+        printf "%s" "$svc" >&3
+        break
+      fi
+      printf "Invalid selection.\n" 1>&2
+    done
+  )
 }
 
 choose_shell() {
@@ -251,6 +284,10 @@ Options:
       --dry-run       Print commands instead of executing
       --self-test     Run internal self-test without requiring Docker
       --print-dc      Print detected compose command and exit
+      --inspect ARGS  Run parquet inspector (passes ARGS to python src/parquet_inspector.py)
+      --prune  ARGS   Run data retention pruner (passes ARGS to python src/data_retention.py)
+      --use-docker-compose  Force legacy docker-compose CLI
+      --use-docker          Force docker compose plugin CLI
   -h, --help          Show this help
 
 Without options, an interactive menu is shown.
@@ -305,6 +342,23 @@ parse_args() {
         ;;
       --print-dc)
         DC_BASE="$(detect_dc)"; printf "%s\n" "${DC_BASE:-<not found>}"; exit 0
+        ;;
+      --use-docker-compose)
+        FORCE_DOCKER_TOOL="docker-compose"
+        ;;
+      --use-docker)
+        FORCE_DOCKER_TOOL="docker"
+        ;;
+      --inspect)
+        shift || die "--inspect requires ARGS (e.g., 'list' or 'head market_snapshot BTCUSDT')"
+        # pass all remaining args to inspector
+        PYTHONPATH="$SCRIPT_DIR" python3 "$SCRIPT_DIR/src/parquet_inspector.py" "$@"
+        exit $?
+        ;;
+      --prune)
+        shift || die "--prune requires ARGS (e.g., '--max-days 7' or '--size-cap 50GB')"
+        PYTHONPATH="$SCRIPT_DIR" python3 "$SCRIPT_DIR/src/data_retention.py" "$@"
+        exit $?
         ;;
       -h|--help)
         usage; exit 0

@@ -4,8 +4,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Any
 
-from dotenv import load_dotenv
-import yaml
+from src.utils.config_utils import (
+    resolve_config_path,
+    load_yaml_config,
+    deep_update,
+)
 
 
 @dataclass
@@ -61,24 +64,12 @@ class AppConfig:
 
 
 def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    for k, v in override.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            base[k] = _deep_update(base[k], v)
-        else:
-            base[k] = v
-    return base
-
-
-def load_yaml_config(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    # Backward-compat shim to avoid breaking imports; delegate to utils
+    return deep_update(base, override)
 
 
 def load_app_config(config_path: str | None = None) -> AppConfig:
-    load_dotenv(override=False)
-    cfg_path = config_path or os.getenv(
-        "CONFIG_PATH", os.path.join("configs", "config.yaml")
-    )
+    cfg_path = config_path or resolve_config_path()
     file_cfg = load_yaml_config(cfg_path) if os.path.exists(cfg_path) else {}
 
     # Environment overrides
@@ -87,7 +78,7 @@ def load_app_config(config_path: str | None = None) -> AppConfig:
     if logbook_dir:
         env_overrides.setdefault("storage", {})["logbook_dir"] = logbook_dir
 
-    merged = _deep_update(file_cfg, env_overrides) if env_overrides else file_cfg
+    merged = deep_update(file_cfg, env_overrides) if env_overrides else file_cfg
 
     # Build dataclasses
     return AppConfig(

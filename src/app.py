@@ -13,6 +13,8 @@ from src.features import FeatureEngine
 from src.signals import SignalEngine
 from src.logger import ParquetLogbook
 from src.evaluator import Evaluator
+from src.control import Control
+from src.runtime_config import RuntimeConfigManager
 
 
 async def pipeline() -> None:
@@ -37,6 +39,8 @@ async def pipeline() -> None:
     logbook = ParquetLogbook(out_dir)
 
     evaluator = Evaluator(logbook_dir=out_dir, horizon_s=cfg.horizons.scalp)
+    control = Control()
+    runtime_cfg = RuntimeConfigManager()
 
     async def consumer() -> None:
         batch_snapshots: list[Dict] = []
@@ -95,7 +99,28 @@ async def pipeline() -> None:
     ]
 
     try:
-        await asyncio.gather(*tasks)
+        # Periodically write a heartbeat while running
+        while True:
+            hb = {
+                "status": "running",
+                "queue_size": queue.qsize(),
+                "symbols": cfg.symbols,
+            }
+            control.write_status(hb)
+
+            # Hot-reload runtime overrides if changed
+            try:
+                changed, overrides = runtime_cfg.load_if_changed()
+                if changed and overrides:
+                    RuntimeConfigManager.apply_to_engines(
+                        overrides,
+                        signal_engine=signal_engine,
+                        evaluator=evaluator,
+                    )
+            except Exception:
+                # Swallow to avoid impacting main loop
+                pass
+            await asyncio.sleep(1)
     except asyncio.CancelledError:
         pass
     finally:
