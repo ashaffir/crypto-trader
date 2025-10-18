@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: binance-spot-signal-bot:latest
+    environment:
+      - ENV=dev
+      - LOGBOOK_DIR=/app/data/logbook
+      - CONFIG_PATH=/app/configs/config.yaml
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data/logbook:/app/data/logbook
+    command: ["python", "-m", "src.app"]
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: binance-spot-signal-ui:latest
+    environment:
+      - LOGBOOK_DIR=/app/data/logbook
+    volumes:
+      - ./data/logbook:/app/data/logbook:ro
+      - ./ui:/app/ui:ro
+    command: ["streamlit", "run", "ui/ui_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    restart: unless-stopped

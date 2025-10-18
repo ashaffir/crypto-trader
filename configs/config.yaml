@@ -1,0 +1,24 @@
+symbols:
+  - BTCUSDT
+streams:
+  aggTrade: true
+  depth_100ms: true
+  kline_1s: true
+features:
+  vol_1s: 1
+  delta_1s: 1
+  ma: [7, 15, 30]
+signal_thresholds:
+  imbalance: 0.6
+  max_spread_bps: 1.5
+horizons:
+  scalp: 30
+  ttl_s: 10
+storage:
+  logbook_dir: data/logbook
+ui:
+  auto_refresh_seconds: 2
+  show_debug: false
+rules:
+  momentum_enabled: true
+  mean_reversion_enabled: true
