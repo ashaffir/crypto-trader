@@ -66,8 +66,8 @@ detect_dc() {
       docker-compose) dc_cmd="docker-compose" ;;
       *) die "Unknown FORCE_DOCKER_TOOL=$FORCE_DOCKER_TOOL" ;;
     esac
-  elif have docker && docker compose version >/dev/null 2>&1; then
-    dc_cmd="docker compose"
+  elif have docker && docker-compose version >/dev/null 2>&1; then
+    dc_cmd="docker-compose"
   elif have docker-compose && docker-compose version >/dev/null 2>&1; then
     dc_cmd="docker-compose"
   else
