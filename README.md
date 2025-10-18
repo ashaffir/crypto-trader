@@ -16,3 +16,7 @@
 2) Launch UI: `streamlit run ui/ui_app.py`
 
 3) Use the sidebar to toggle the bot and tune strategy parameters. Recent signals and outcomes will appear as data arrives.
+
+## Strategy Overview
+
+See `docs/strategy.md` for a description of the live momentum strategy, including equations for computed features, the signal emission rule, a flow schematic, and practical tuning advice.
