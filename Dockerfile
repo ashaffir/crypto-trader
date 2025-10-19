@@ -21,6 +21,7 @@ COPY ui /app/ui
 # Default paths
 ENV CONFIG_PATH=/app/configs/config.yaml
 ENV LOGBOOK_DIR=/app/data/logbook
+ENV PYTHONPATH=/app
 
 RUN mkdir -p /app/data/logbook
 

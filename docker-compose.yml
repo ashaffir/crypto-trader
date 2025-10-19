@@ -22,6 +22,7 @@ services:
       dockerfile: Dockerfile
     image: binance-spot-signal-ui:latest
     environment:
+      - PYTHONPATH=/app
       - LOGBOOK_DIR=/app/data/logbook
       - CONTROL_DIR=/app/data/control
     volumes:
