@@ -5,11 +5,17 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timezone, timedelta
 
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+# Ensure project root (parent of `ui/`) is on sys.path so `ui.*` and `src.*` are importable
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
-from ui.lib.common import LOGBOOK_DIR, render_common_sidebar, PAGE_HEADER_TITLE
+from ui.lib.common import (
+    LOGBOOK_DIR,
+    CONTROL_DIR,
+    render_common_sidebar,
+    PAGE_HEADER_TITLE,
+)
 from ui.lib.retention_utils import (
     iter_date_partitions,
     prune_by_days,
@@ -19,6 +25,70 @@ from ui.lib.retention_utils import (
     dir_size_bytes,
 )
 from ui.lib.logbook_utils import read_latest_file
+
+try:
+    from ui.lib.retention_state import load_retention_settings, save_retention_settings
+except Exception:
+    # Fallback inline persistence if module is unavailable
+    import json as _json
+
+    def _runtime_file(base_dir: str | None = None) -> str:
+        b = base_dir or CONTROL_DIR
+        return os.path.join(b, "runtime_config.json")
+
+    _DEFAULTS = {
+        "mode": "days",
+        "max_days": 7,
+        "size_cap": "50GB",
+        "dry_run_default": True,
+    }
+
+    def load_retention_settings(base_dir: str | None = None) -> dict:
+        path = _runtime_file(base_dir)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception:
+            data = {}
+        raw = data.get("retention") if isinstance(data, dict) else None
+        out = dict(_DEFAULTS)
+        if isinstance(raw, dict):
+            for k in out.keys():
+                if k in raw:
+                    out[k] = raw[k]
+        return out
+
+    def save_retention_settings(settings: dict, base_dir: str | None = None) -> bool:
+        path = _runtime_file(base_dir)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            current = {}
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    current = _json.load(f) or {}
+        except Exception:
+            current = {}
+        keep = {
+            k: settings[k]
+            for k in ("mode", "max_days", "size_cap", "dry_run_default")
+            if k in settings
+        }
+        merged_ret = load_retention_settings(base_dir)
+        merged_ret.update(keep)
+        current["retention"] = merged_ret
+        tmp = f"{path}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(current, f)
+            os.replace(tmp, path)
+            return True
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            return False
 
 
 st.set_page_config(page_title="Data Tools", layout="wide")
@@ -79,6 +149,8 @@ with ins_tab:
                 st.dataframe(df[cols])
 
 with ret_tab:
+    # Load persisted UI defaults
+    persisted = load_retention_settings()
     total_size = dir_size_bytes(LOGBOOK_DIR) if os.path.isdir(LOGBOOK_DIR) else 0
     parts = (
         list(iter_date_partitions(LOGBOOK_DIR)) if os.path.isdir(LOGBOOK_DIR) else []
@@ -89,13 +161,26 @@ with ret_tab:
     cols[2].metric("Tables", f"{len({p[0] for p in parts})}")
 
     st.markdown("Retention mode")
-    mode = st.radio("Mode", ["Keep last N days", "Cap total size"], horizontal=True)
-    dry = st.checkbox("Dry-run (preview only)", value=True)
+    mode_default = (
+        "Keep last N days" if str(persisted.get("mode")) == "days" else "Cap total size"
+    )
+    mode = st.radio(
+        "Mode",
+        ["Keep last N days", "Cap total size"],
+        horizontal=True,
+        index=["Keep last N days", "Cap total size"].index(mode_default),
+    )
+    dry = st.checkbox(
+        "Dry-run (preview only)", value=bool(persisted.get("dry_run_default", True))
+    )
 
     preview = []
     if mode == "Keep last N days":
         max_days = st.number_input(
-            "Max days to keep", min_value=1, max_value=365, value=7
+            "Max days to keep",
+            min_value=1,
+            max_value=365,
+            value=int(persisted.get("max_days", 7)),
         )
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_days))
         for t, s, d, pdir in parts:
@@ -111,8 +196,18 @@ with ret_tab:
                 st.info(f"Would remove {len(preview)} partitions (dry-run)")
             else:
                 st.success(f"Removed {len(removed)} partitions")
+            # Persist settings
+            save_retention_settings(
+                {
+                    "mode": "days",
+                    "max_days": int(max_days),
+                    "dry_run_default": bool(dry),
+                }
+            )
     else:
-        cap_str = st.text_input("Size cap (e.g., 50GB, 500MB)", value="50GB")
+        cap_str = st.text_input(
+            "Size cap (e.g., 50GB, 500MB)", value=str(persisted.get("size_cap", "50GB"))
+        )
         if cap_str:
             try:
                 cap = parse_size_cap(cap_str)
@@ -146,6 +241,14 @@ with ret_tab:
                     st.info(f"Would remove {len(preview)} partitions (dry-run)")
                 else:
                     st.success(f"Removed {len(removed)} partitions")
+                # Persist settings
+                save_retention_settings(
+                    {
+                        "mode": "size",
+                        "size_cap": str(cap_str),
+                        "dry_run_default": bool(dry),
+                    }
+                )
 
     if preview:
         st.markdown("Preview of partitions to remove")

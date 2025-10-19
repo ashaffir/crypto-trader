@@ -141,20 +141,5 @@ else:
 # Show control dir for clarity only
 st.caption(f"CONTROL_DIR: {CONTROL_DIR}")
 
-if show_price_panel:
-    # Live price chart (mid) from recent snapshots
-    snap_df = tail_parquet_table("market_snapshot", symbol, tail_files=20)
-    if not snap_df.empty:
-        try:
-            # Convert to time index and show mid price
-            plot_df = snap_df[["ts_ms", "mid"]].dropna().sort_values("ts_ms").tail(100)
-            plot_df["ts"] = pd.to_datetime(plot_df["ts_ms"], unit="ms")
-            plot_df = plot_df.set_index("ts")["mid"]
-            st.line_chart(plot_df)
-        except Exception:
-            st.info("Waiting for price data…")
-    else:
-        st.info("No snapshot data yet (use Data Tools → Inspect)")
-
 st.caption("Auto-refreshing…")
 time.sleep(refresh)
