@@ -1,6 +1,6 @@
 # Strategy Specification — Binance Spot Signal Bot
 
-This document describes the live momentum strategy implemented in the bot: inputs, computed features, signal logic, control parameters, and evaluation. It uses simple equations and a flow schematic for clarity.
+This document describes the live momentum and mean-reversion strategies implemented in the bot: inputs, computed features, signal logic, control parameters, and evaluation. It uses simple equations and a flow schematic for clarity.
 
 ## 1) Data Inputs
 
@@ -86,7 +86,41 @@ confidence_t = min(0.99, 0.5 + 0.5 * min(1, |ob_imbalance_t|))
 Signal payload fields:
 - `symbol`, `side`, `expected_bps`, `confidence`, `horizon_s = H`, `ttl_s = TTL`, `rule_id = "mom_v1"`, `ts_ms` (timestamp), `signal_id` (UUID)
 
-Mean-reversion rule exists as a placeholder switch; momentum is the primary live rule.
+Momentum is the primary directional rule.
+
+### Mean-Reversion Rule (mr_v2)
+
+Intuition: When recent trades deviate from mid enough to suggest a short-term overshoot, and spreads are acceptable, fade the move back toward mid. Optionally avoid strong one-sided order-book conditions.
+
+Parameters (from UI/runtime config):
+- MR min revert (bps): `MR_min` > 0 — minimum 1s deviation vs mid, in bps
+- MR expected bps: `MR_exp` > 0 — directional return target in bps
+- MR conf norm (bps): `MR_norm` > 0 — scales confidence with deviation
+- MR max |imbalance|: `MR_imb_max` in [0, 1] — guard to skip when order book is too one-sided (set to 1.0 to disable)
+- Max spread (bps): `S_max` > 0 — reused from momentum
+- Horizon `H`, TTL `TTL`: shared with momentum
+
+Trigger at time `t` (with mid `m_t` and 1s deviation `delta_1s_t`):
+
+```
+dev_bps_t = |delta_1s_t| / m_t * 10000
+dev_bps_t >= MR_min AND spread_bps_t <= S_max AND |ob_imbalance_t| <= MR_imb_max
+```
+
+Direction and targets:
+
+```
+side_t = short if delta_1s_t > 0 else long
+expected_bps_t = -MR_exp if side_t = short else +MR_exp
+```
+
+Confidence scales with deviation magnitude and penalizes strong imbalance (capped):
+
+```
+norm = min(1, dev_bps_t / MR_norm)
+imb_penalty = 1 - 0.3 * min(1, |ob_imbalance_t|)
+confidence_t = clamp(0.5, 0.95, 0.55 + 0.35 * norm * imb_penalty)
+```
 
 ## 4) Flow Schematic
 
@@ -121,9 +155,13 @@ UI (controls and views) ----reads----> market_snapshot / signal_emitted / signal
 ## 5) Controls and Their Effects
 
 - Momentum enabled: turn momentum rule on/off.
-- Mean-reversion enabled: toggle placeholder rule on/off.
+- Mean-reversion enabled: turn mean-reversion on/off.
 - Imbalance threshold `I_thr`: higher → fewer but stronger signals; lower → more signals.
 - Max spread (bps) `S_max`: lower → only in tight markets; higher → more signals but potentially worse fills.
+- MR min revert (bps) `MR_min`: higher → only larger overshoots; lower → more frequent fades.
+- MR expected bps `MR_exp`: target distance for mean reversion; larger increases profit target but may reduce hit rate.
+- MR conf norm (bps) `MR_norm`: how quickly confidence rises with deviation magnitude.
+- MR max |imbalance| `MR_imb_max`: lower to avoid fading when the book is heavily one-sided.
 - Horizon `H`: evaluation window; outcomes computed H seconds after emission.
 - Signal TTL `TTL`: how long a signal stays fresh for execution.
 - Bot Running: starts/stops the live pipeline.

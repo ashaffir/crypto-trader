@@ -22,6 +22,11 @@ class FeatureWindows:
 class SignalThresholds:
     imbalance: float = 0.6
     max_spread_bps: float = 1.5
+    # Mean-reversion parameters
+    mr_min_revert_bps: float = 2.0
+    mr_expected_bps: float = 6.0
+    mr_conf_norm_bps: float = 5.0
+    mr_max_imbalance: float = 1.0
 
 
 @dataclass

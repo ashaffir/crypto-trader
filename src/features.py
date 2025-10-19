@@ -34,6 +34,9 @@ class SymbolFeatures:
     delta_1s: RollingSeries
     ma_values: Dict[int, RollingSeries]
     last_mid: Optional[float] = None
+    last_best_bid: Optional[float] = None
+    last_best_ask: Optional[float] = None
+    last_spread_bps: Optional[float] = None
 
 
 class FeatureEngine:
@@ -95,6 +98,8 @@ class FeatureEngine:
         if kind == "depth":
             best_bid = msg.get("best_bid")
             best_ask = msg.get("best_ask")
+            st.last_best_bid = best_bid
+            st.last_best_ask = best_ask
         elif kind == "aggTrade":
             last_px = msg.get("price")
             last_qty = msg.get("qty")
@@ -109,8 +114,14 @@ class FeatureEngine:
             mid = st.last_mid
 
         spread_bps = None
-        if best_bid is not None and best_ask is not None and mid:
-            spread_bps = ((best_ask - best_bid) / mid) * 1e4
+        # For trades, fallback to last known best bid/ask to compute spread
+        bb = best_bid if best_bid is not None else st.last_best_bid
+        aa = best_ask if best_ask is not None else st.last_best_ask
+        if bb is not None and aa is not None and mid:
+            spread_bps = ((aa - bb) / mid) * 1e4
+            st.last_spread_bps = spread_bps
+        else:
+            spread_bps = st.last_spread_bps
 
         if last_qty is not None:
             st.vol_1s.add(ts_ms, float(last_qty))
@@ -123,7 +134,7 @@ class FeatureEngine:
             for w, rs in st.ma_values.items():
                 rs.add(ts_ms, float(mid))
 
-        ob_imbalance = self.compute_imbalance(best_bid, best_ask)
+        ob_imbalance = self.compute_imbalance(bb, aa)
         vol_1s = st.vol_1s.sum()
         delta_1s = st.delta_1s.sum()
 

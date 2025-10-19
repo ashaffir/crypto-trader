@@ -11,6 +11,11 @@ features:
 signal_thresholds:
   imbalance: 0.6
   max_spread_bps: 1.5
+  # mean-reversion defaults
+  mr_min_revert_bps: 2.0
+  mr_expected_bps: 6.0
+  mr_conf_norm_bps: 5.0
+  mr_max_imbalance: 1.0
 horizons:
   scalp: 30
   ttl_s: 10

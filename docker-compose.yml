@@ -25,7 +25,7 @@ services:
       - LOGBOOK_DIR=/app/data/logbook
       - CONTROL_DIR=/app/data/control
     volumes:
-      - ./data/logbook:/app/data/logbook:ro
+      - ./data/logbook:/app/data/logbook
       - ./data/control:/app/data/control
       - ./ui:/app/ui:ro
     command: ["streamlit", "run", "ui/ui_app.py", "--server.port=8501", "--server.address=0.0.0.0"]

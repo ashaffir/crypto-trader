@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# Interactive Docker Compose manager for this project.
-# - Minimal dependencies; prefers `docker compose`, falls back to `docker-compose`.
-# - Interactive menu for build, up, down, restart, logs, exec, status, etc.
-# - Supports non-interactive flags: --help, --dry-run, --self-test, --file.
+# Interactive project manager for development and deployment.
+# - Works with Docker Compose (prefers `docker compose`, falls back to `docker-compose`).
+# - Interactive menu (default), plus non-interactive subcommands for CI and scripts.
+# - Adds `doctor` (env diagnostics) and `dev` (local runs without Docker).
+# - Still supports flags: --help, --dry-run, --self-test, --file, --inspect, --prune.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -13,6 +14,8 @@ DEFAULT_COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 COMPOSE_FILE="${DEFAULT_COMPOSE_FILE}"
 DRY_RUN="false"
 FORCE_DOCKER_TOOL=""  # internal/testing override: docker|docker-compose
+CMD=""                 # subcommand, if provided
+CMD_ARGS=()            # subcommand args
 
 color() {
   local code="$1"; shift || true
@@ -207,6 +210,11 @@ action_logs_follow(){ local s; s=$(choose_service); dc logs -f "$s"; }
 action_logs_once()  { local s; s=$(choose_service); dc logs --tail=200 "$s"; }
 action_restart_svc(){ local s; s=$(choose_service); dc restart "$s"; }
 action_stop_svc()   { local s; s=$(choose_service); dc stop "$s"; }
+action_start_all()  { action_up_detached; }
+action_stop_all()   { dc stop; }
+action_restart_all(){ dc restart; }
+action_build_restart_all() { dc up -d --build; }
+action_build_restart_svc() { local s; s=$(choose_service); dc up -d --build "$s"; }
 action_exec()       {
   local s; s=$(choose_service)
   local cmd; cmd=$(choose_shell)
@@ -245,7 +253,12 @@ Choose an action:
  12) Rebuild (no-cache)
  13) Show compose config
  14) Prune (dangling images/volumes)
- 15) Exit
+ 15) Start all
+ 16) Stop all
+ 17) Restart all
+ 18) Build & Restart (all)
+ 19) Build & Restart (service)
+ 20) Exit
 EOF
 }
 
@@ -253,7 +266,7 @@ interactive_menu() {
   local choice
   while true; do
     print_menu
-    read -r -p "Enter choice [1-15]: " choice || true
+    read -r -p "Enter choice [1-20]: " choice || true
     case "$choice" in
       1)  action_build ;;
       2)  action_pull ;;
@@ -269,7 +282,12 @@ interactive_menu() {
       12) action_rebuild_nocache ;;
       13) action_config ;;
       14) action_prune ;;
-      15) notice "Bye!"; break ;;
+      15) action_start_all ;;
+      16) action_stop_all ;;
+      17) action_restart_all ;;
+      18) action_build_restart_all ;;
+      19) action_build_restart_svc ;;
+      20) notice "Bye!"; break ;;
       *)  warn "Invalid choice." ;;
     esac
   done
@@ -290,7 +308,28 @@ Options:
       --use-docker          Force docker compose plugin CLI
   -h, --help          Show this help
 
-Without options, an interactive menu is shown.
+Commands (non-interactive):
+  up [fg|detached]           Start all services (default: detached)
+  down                       Stop and remove containers
+  ps                         Show service status
+  build [--no-cache]         Build images
+  pull                       Pull images
+  logs [svc] [follow]        Show logs (follow if specified)
+  restart [svc]              Restart a service (prompt if missing)
+  stop [svc]                 Stop a service (prompt if missing)
+  start-all                  Start all services (alias for 'up detached')
+  stop-all                   Stop all services (no removal)
+  restart-all                Restart all services
+  build-restart [all|svc]    Build images and restart service(s)
+  exec [svc] [bash|sh|python|-- cmd]
+                             Exec into service; with '--', run custom command
+  config                     Show composed config
+  prune-docker               Prune dangling images/volumes
+  doctor                     Run environment diagnostics
+  dev bot                    Run bot locally: python -m src.supervisor
+  dev ui [--port 8501]       Run UI locally: streamlit run ui/ui_app.py
+
+Without a command, an interactive menu is shown.
 EOF
 }
 
@@ -363,12 +402,170 @@ parse_args() {
       -h|--help)
         usage; exit 0
         ;;
-      *)
+      --)
+        shift || true
+        ;;
+      -* )
         die "Unknown argument: $1"
+        ;;
+      * )
+        # First non-option -> treat as subcommand; rest are its args
+        CMD="$1"; shift || true
+        CMD_ARGS=("$@")
+        return 0
         ;;
     esac
     shift || true
   done
+}
+
+doctor() {
+  notice "Running diagnostics..."
+  # Docker and Compose
+  local docker_ok="no" compose_cmd
+  if have docker; then
+    docker_ok="yes"
+    notice "docker: $(docker --version 2>/dev/null || echo not found)"
+  else
+    warn "docker not found"
+  fi
+  compose_cmd="$(detect_dc || true)"
+  if [[ -n "$compose_cmd" ]]; then
+    notice "compose: $compose_cmd"
+    run_cmd $compose_cmd version || true
+  else
+    warn "docker compose/compose plugin not available"
+  fi
+
+  # Python & Streamlit (for local dev)
+  if have python3; then
+    notice "python3: $(python3 -V 2>/dev/null)"
+  else
+    warn "python3 not found"
+  fi
+  if have streamlit; then
+    notice "streamlit: $(streamlit --version 2>/dev/null)"
+  else
+    warn "streamlit CLI not found"
+  fi
+
+  # Paths and permissions
+  local paths=("$SCRIPT_DIR/configs" "$SCRIPT_DIR/data/logbook" "$SCRIPT_DIR/data/control" "$COMPOSE_FILE")
+  for p in "${paths[@]}"; do
+    if [[ -e "$p" ]]; then
+      notice "exists: $p"
+    else
+      warn "missing: $p"
+    fi
+  done
+  mkdir -p "$SCRIPT_DIR/data/logbook" "$SCRIPT_DIR/data/control" 2>/dev/null || true
+  if [[ -w "$SCRIPT_DIR/data/logbook" && -w "$SCRIPT_DIR/data/control" ]]; then
+    notice "data dirs writable"
+  else
+    warn "data dirs not writable"
+  fi
+
+  # Compose services
+  local svcs
+  svcs="$(list_services || true)"
+  if [[ -n "$svcs" ]]; then
+    notice "services: $(echo "$svcs" | tr '\n' ' ')"
+  else
+    warn "no services detected in $COMPOSE_FILE"
+  fi
+  notice "Diagnostics complete."
+}
+
+run_dev() {
+  local what="$1"; shift || true
+  case "$what" in
+    bot)
+      notice "Starting local bot (python -m src.supervisor)"
+      PYTHONPATH="$SCRIPT_DIR" run_cmd python3 -m src.supervisor "$@"
+      ;;
+    ui)
+      local port="8501"
+      while (($#)); do
+        case "$1" in
+          --port) shift; port="$1" ;;
+          *) break ;;
+        esac
+        shift || true
+      done
+      notice "Starting local UI on :$port"
+      PYTHONPATH="$SCRIPT_DIR" run_cmd streamlit run "$SCRIPT_DIR/ui/ui_app.py" --server.port="$port" --server.address=0.0.0.0 "$@"
+      ;;
+    *)
+      die "Unknown dev target: ${what:-<empty>}"
+      ;;
+  esac
+}
+
+run_command() {
+  local cmd="$1"; shift || true
+  case "$cmd" in
+    up)
+      local mode="detached"
+      if [[ "${1:-}" == "fg" || "${1:-}" == "foreground" ]]; then
+        mode="fg"; shift || true
+      fi
+      if [[ "$mode" == "fg" ]]; then action_up_fg; else action_up_detached; fi
+      ;;
+    down) action_down ;;
+    ps) action_ps ;;
+    build)
+      if [[ "${1:-}" == "--no-cache" ]]; then action_rebuild_nocache; else action_build; fi
+      ;;
+    pull) action_pull ;;
+    logs)
+      local s="${1:-}"
+      if [[ -n "$s" ]]; then shift || true; else s="$(choose_service)"; fi
+      if [[ "${1:-}" == "follow" ]]; then dc logs -f "$s"; else dc logs --tail=200 "$s"; fi
+      ;;
+    restart)
+      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; fi; dc restart "$s"
+      ;;
+    stop)
+      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; fi; dc stop "$s"
+      ;;
+    start-all)
+      action_start_all
+      ;;
+    stop-all)
+      action_stop_all
+      ;;
+    restart-all)
+      action_restart_all
+      ;;
+    build-restart)
+      local target="${1:-}"
+      if [[ -z "$target" ]]; then
+        target="$(choose_service)"
+      fi
+      if [[ "$target" == "all" ]]; then
+        dc up -d --build
+      else
+        dc up -d --build "$target"
+      fi
+      ;;
+    exec)
+      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; else shift || true; fi
+      if [[ "${1:-}" == "bash" || "${1:-}" == "sh" || "${1:-}" == "python" ]]; then
+        local shell="$1"; shift || true
+        if [[ "$shell" == "bash" || "$shell" == "sh" ]]; then dc exec -it "$s" "$shell"; else dc exec "$s" sh -lc "$shell"; fi
+      else
+        if [[ "${1:-}" == "--" ]]; then shift || true; fi
+        if (($#)); then dc exec "$s" sh -lc "$*"; else dc exec -it "$s" sh; fi
+      fi
+      ;;
+    config) action_config ;;
+    prune-docker) action_prune ;;
+    doctor) doctor ;;
+    dev) run_dev "$@" ;;
+    *)
+      die "Unknown command: $cmd"
+      ;;
+  esac
 }
 
 main() {
@@ -378,7 +575,16 @@ main() {
   fi
   trap 'printf "\n"; warn "Interrupted."; exit 130' INT
   DC_BASE="$(detect_dc)" || true
-  interactive_menu
+  if [[ -n "$CMD" ]]; then
+    # Safely expand CMD_ARGS under 'set -u' when it may be unset or empty
+    if [[ ${#CMD_ARGS[@]:-0} -gt 0 ]]; then
+      run_command "$CMD" "${CMD_ARGS[@]}"
+    else
+      run_command "$CMD"
+    fi
+  else
+    interactive_menu
+  fi
 }
 
 main "$@"

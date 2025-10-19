@@ -17,6 +17,21 @@ async def run_supervisor(poll_interval_s: float = 1.0) -> None:
         except Exception:
             new_desired = "stopped"
 
+        # If the task terminated on its own, clear it so we can relaunch when desired
+        if task is not None and task.done():
+            try:
+                exc = task.exception()
+                if exc is not None:
+                    logger.exception(f"Pipeline task ended with error: {exc}")
+            except asyncio.CancelledError:
+                # Normal cancellation path
+                pass
+            except Exception:
+                # Best-effort logging
+                pass
+            finally:
+                task = None
+
         if new_desired != desired:
             desired = new_desired
             logger.info(f"Desired state changed to: {desired}")
@@ -34,6 +49,10 @@ async def run_supervisor(poll_interval_s: float = 1.0) -> None:
                     pass
                 finally:
                     task = None
+
+        # If desired is running but task is absent (e.g., after crash), start it
+        if desired == "running" and task is None:
+            task = asyncio.create_task(pipeline(), name="pipeline")
 
         # Write status heartbeat for visibility; mark "stopped" when not running
         if task is not None and not task.done():
