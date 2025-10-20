@@ -53,6 +53,33 @@ def prune_by_days(base_dir: str, max_days: int, dry_run: bool) -> List[str]:
     return removed
 
 
+def prune_by_minutes(base_dir: str, max_minutes: int, dry_run: bool) -> List[str]:
+    """Prune partitions older than N minutes based on date partition granularity.
+
+    Since partitions are daily (date=YYYY-MM-DD), we approximate minute-level pruning
+    by translating minutes to a cutoff datetime and removing any partitions strictly
+    older than the cutoff midnight. This errs on the conservative side within the
+    current layout.
+    """
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=max_minutes)
+    cutoff_date = cutoff_dt.strftime("%Y-%m-%d")
+    removed: List[str] = []
+    for _table, _sym, date_str, ddir in iter_date_partitions(base_dir):
+        try:
+            dt = parse_date(date_str)
+        except Exception:
+            continue
+        # remove if partition date is earlier than the cutoff date
+        if dt.strftime("%Y-%m-%d") < cutoff_date:
+            if dry_run:
+                print(f"DRY-RUN would remove: {ddir}")
+            else:
+                shutil.rmtree(ddir, ignore_errors=True)
+                removed.append(ddir)
+                _cleanup_empty_parents(ddir)
+    return removed
+
+
 def _cleanup_empty_parents(ddir: str) -> None:
     # Remove empty date/symbol/table directories up to base logbook dir
     path = ddir

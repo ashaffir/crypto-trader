@@ -161,21 +161,60 @@ with ret_tab:
     cols[2].metric("Tables", f"{len({p[0] for p in parts})}")
 
     st.markdown("Retention mode")
-    mode_default = (
-        "Keep last N days" if str(persisted.get("mode")) == "days" else "Cap total size"
-    )
+    mode_map = {
+        "minutes": "Keep last N minutes",
+        "days": "Keep last N days",
+        "size": "Cap total size",
+    }
+    mode_default = mode_map.get(str(persisted.get("mode")), "Keep last N days")
     mode = st.radio(
         "Mode",
-        ["Keep last N days", "Cap total size"],
+        ["Keep last N minutes", "Keep last N days", "Cap total size"],
         horizontal=True,
-        index=["Keep last N days", "Cap total size"].index(mode_default),
+        index=["Keep last N minutes", "Keep last N days", "Cap total size"].index(
+            mode_default
+        ),
     )
     dry = st.checkbox(
         "Dry-run (preview only)", value=bool(persisted.get("dry_run_default", True))
     )
 
     preview = []
-    if mode == "Keep last N days":
+    if mode == "Keep last N minutes":
+        mins = st.number_input(
+            "Max minutes to keep",
+            min_value=1,
+            max_value=60 * 24 * 30,
+            value=int(persisted.get("max_minutes", 60)),
+        )
+        # Approx preview by days granularity: show partitions older than cutoff minute
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(mins))
+        for t, s, d, pdir in parts:
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            if dt < cutoff:
+                preview.append((t, s, d, pdir))
+        if st.button("Apply", key="retention_apply_minutes"):
+            try:
+                from src.data_retention import prune_by_minutes
+
+                removed = prune_by_minutes(LOGBOOK_DIR, int(mins), dry)
+            except Exception:
+                removed = []
+            if dry:
+                st.info(f"Would remove {len(preview)} partitions (dry-run)")
+            else:
+                st.success(f"Removed {len(removed)} partitions")
+            save_retention_settings(
+                {
+                    "mode": "minutes",
+                    "max_minutes": int(mins),
+                    "dry_run_default": bool(dry),
+                }
+            )
+    elif mode == "Keep last N days":
         max_days = st.number_input(
             "Max days to keep",
             min_value=1,

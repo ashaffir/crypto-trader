@@ -26,38 +26,7 @@ from ui.lib.control_utils import (
 )
 
 
-LOGBOOK_DIR = LOGBOOK_DIR
-CONTROL_DIR = CONTROL_DIR
-
-
-def tail_parquet_table(
-    table: str, symbol: str, tail_files: int = 20
-) -> pd.DataFrame:  # shim for old import paths
-    from ui.lib.logbook_utils import tail_parquet_table as _t
-
-    return _t(table, symbol, tail_files)
-
-
-from ui.lib.control_utils import (
-    read_status as _rs,
-    read_desired as _rd,
-    set_desired_state as _sds,
-)
-
-
-def read_status() -> dict:
-    return _rs()
-
-
-def read_desired() -> str:
-    return _rd()
-
-
-def set_desired_state(running: bool) -> bool:
-    return _sds(running)
-
-
-st.set_page_config(page_title="Binance Signal Bot", layout="wide")
+st.set_page_config(page_title="Home", layout="wide")
 
 st.title(PAGE_HEADER_TITLE)
 with st.sidebar:
@@ -143,3 +112,4 @@ st.caption(f"CONTROL_DIR: {CONTROL_DIR}")
 
 st.caption("Auto-refreshing…")
 time.sleep(refresh)
+st.rerun()

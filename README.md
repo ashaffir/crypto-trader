@@ -3,7 +3,7 @@
 ## Live controls
 
 - UI writes desired bot state to `data/control/bot_control.json`.
-- Strategy parameters can be changed in the Streamlit sidebar:
+<!-- Strategy page deprecated; sidebar controls removed. -->
   - Rules: momentum and mean-reversion toggles
   - Thresholds: `imbalance`, `max_spread_bps`
   - Horizons: `scalp` (evaluation window, seconds), `ttl_s`
@@ -17,6 +17,6 @@
 
 3) Use the sidebar to toggle the bot and tune strategy parameters. Recent signals and outcomes will appear as data arrives.
 
-## Strategy Overview
+<!-- Strategy Overview removed. -->
 
 See `docs/strategy.md` for a description of the live momentum strategy, including equations for computed features, the signal emission rule, a flow schematic, and practical tuning advice.

@@ -71,7 +71,76 @@ def save_backtesting_settings(settings: dict, base_dir: str | None = None) -> bo
     return _safe_write_json(path, merged)
 
 
+# ---- Tracked symbols and LLM settings ----
+
+
+def load_tracked_symbols(base_dir: str | None = None) -> list[str]:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("symbols") if isinstance(cfg, dict) else None
+    if isinstance(raw, list):
+        return [str(x).upper() for x in raw if isinstance(x, (str,))]
+    # Fallback to config default
+    return ["BTCUSDT"]
+
+
+def save_tracked_symbols(symbols: list[str], base_dir: str | None = None) -> bool:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    merged["symbols"] = [str(s).upper() for s in symbols if s]
+    return _safe_write_json(path, merged)
+
+
+def load_llm_settings(base_dir: str | None = None) -> dict:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("llm") if isinstance(cfg, dict) else None
+    # Defaults
+    out: dict[str, object] = {
+        "active": "default",
+        "window_seconds": 30,
+        "refresh_seconds": 5,
+        "configs": {
+            "default": {
+                "base_url": "",
+                "api_key": "",
+                "model": "",
+                "system_prompt": "",
+                "user_template": "",
+            }
+        },
+    }
+    if isinstance(raw, dict):
+        # shallow merge for known keys
+        for k in ("active", "window_seconds", "refresh_seconds"):
+            if k in raw:
+                out[k] = raw[k]
+        cfgs = raw.get("configs")
+        if isinstance(cfgs, dict) and cfgs:
+            out["configs"] = cfgs
+    return out
+
+
+def save_llm_settings(settings: dict, base_dir: str | None = None) -> bool:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    keep: dict[str, object] = {}
+    for k in ("active", "window_seconds", "refresh_seconds", "configs"):
+        if k in settings:
+            keep[k] = settings[k]
+    cur = load_llm_settings(base_dir)
+    cur.update(keep)
+    merged["llm"] = cur
+    return _safe_write_json(path, merged)
+
+
 __all__ = [
     "load_backtesting_settings",
     "save_backtesting_settings",
+    "load_tracked_symbols",
+    "save_tracked_symbols",
+    "load_llm_settings",
+    "save_llm_settings",
 ]

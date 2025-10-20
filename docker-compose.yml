@@ -30,7 +30,7 @@ services:
       - ./data/control:/app/data/control
       - ./src:/app/src:ro
       - ./ui:/app/ui:ro
-    command: ["streamlit", "run", "ui/ui_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    command: ["streamlit", "run", "ui/Home.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
       - "8501:8501"
     restart: unless-stopped

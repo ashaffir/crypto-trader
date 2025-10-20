@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import collections
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Any
 
 
 @dataclass
@@ -37,6 +37,8 @@ class SymbolFeatures:
     last_best_bid: Optional[float] = None
     last_best_ask: Optional[float] = None
     last_spread_bps: Optional[float] = None
+    # Recent raw snapshots window for LLM summaries
+    recent_snapshots: Deque[Dict[str, Any]] = field(default_factory=collections.deque)
 
 
 class FeatureEngine:
@@ -46,9 +48,11 @@ class FeatureEngine:
         vol_window_s: int = 1,
         delta_window_s: int = 1,
         ma_windows: List[int] | None = None,
+        snapshot_window_s: int = 60,
     ):
         if ma_windows is None:
             ma_windows = [7, 15, 30]
+        self.snapshot_window_ms = int(snapshot_window_s) * 1000
         self.state: Dict[str, SymbolFeatures] = {
             s: SymbolFeatures(
                 vol_1s=RollingSeries(window_ms=vol_window_s * 1000),
@@ -151,4 +155,57 @@ class FeatureEngine:
             "vol_1s": vol_1s,
             "delta_1s": delta_1s,
         }
+        # Store in recent window
+        st.recent_snapshots.append(snapshot)
+        # Compact recent window by cutoff
+        cutoff = ts_ms - self.snapshot_window_ms if ts_ms is not None else None
+        if cutoff is not None:
+            while (
+                st.recent_snapshots
+                and (st.recent_snapshots[0].get("ts_ms") or 0) < cutoff
+            ):
+                st.recent_snapshots.popleft()
         return snapshot
+
+    # -------- Public APIs for LLM summaries --------
+    def get_recent_window(
+        self, symbol: str, window_s: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        st = self.state.get(symbol)
+        if st is None:
+            return []
+        if not st.recent_snapshots:
+            return []
+        if window_s is None:
+            return list(st.recent_snapshots)
+        last_ts = st.recent_snapshots[-1].get("ts_ms") or 0
+        cutoff = last_ts - int(window_s) * 1000
+        return [row for row in st.recent_snapshots if (row.get("ts_ms") or 0) >= cutoff]
+
+    def summarize_window(
+        self, symbol: str, window_s: Optional[int] = None
+    ) -> Dict[str, Any]:
+        rows = self.get_recent_window(symbol, window_s)
+        if not rows:
+            return {"symbol": symbol, "count": 0}
+        mids = [r.get("mid") for r in rows if r.get("mid") is not None]
+        spreads = [r.get("spread_bps") for r in rows if r.get("spread_bps") is not None]
+        imbs = [
+            r.get("ob_imbalance") for r in rows if r.get("ob_imbalance") is not None
+        ]
+        vols = [r.get("last_qty") for r in rows if r.get("last_qty") is not None]
+        return {
+            "symbol": symbol,
+            "count": len(rows),
+            "t0_ms": rows[0].get("ts_ms"),
+            "t1_ms": rows[-1].get("ts_ms"),
+            "last_mid": rows[-1].get("mid"),
+            "last_spread_bps": rows[-1].get("spread_bps"),
+            "last_ob_imbalance": rows[-1].get("ob_imbalance"),
+            "series": {
+                "mid": [m for m in mids],
+                "spread_bps": [s for s in spreads],
+                "ob_imbalance": [i for i in imbs],
+                "last_qty": [v for v in vols],
+            },
+        }

@@ -10,7 +10,7 @@ LOGBOOK_DIR = _os.getenv("LOGBOOK_DIR", "data/logbook")
 CONTROL_DIR = _os.getenv("CONTROL_DIR", _os.path.join("data", "control"))
 
 __all__ = ["LOGBOOK_DIR", "CONTROL_DIR"]
-PAGE_HEADER_TITLE = "Binance Spot Signal Bot — Live Monitor"
+PAGE_HEADER_TITLE = "Crypto Bot"
 
 
 def render_common_sidebar(st):
@@ -83,14 +83,25 @@ def render_common_sidebar(st):
     except Exception:
         pass
     # Initialize shared sidebar state for symbol/refresh so it's consistent across pages
-    if "sidebar_symbol" not in st.session_state:
-        st.session_state["sidebar_symbol"] = "BTCUSDT"
     if "sidebar_refresh" not in st.session_state:
         st.session_state["sidebar_refresh"] = 2
+    try:
+        from ui.lib.settings_state import load_tracked_symbols
+
+        symbols = load_tracked_symbols()
+        if not symbols:
+            symbols = ["BTCUSDT"]
+    except Exception:
+        symbols = ["BTCUSDT"]
+    if (
+        "sidebar_symbol" not in st.session_state
+        or st.session_state["sidebar_symbol"] not in symbols
+    ):
+        st.session_state["sidebar_symbol"] = symbols[0]
 
     symbol = st.selectbox(
         "Symbol",
-        ["BTCUSDT"],  # extend later
+        symbols,
         key="sidebar_symbol",
     )
     refresh = st.number_input(

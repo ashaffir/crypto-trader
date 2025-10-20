@@ -80,5 +80,15 @@ class ParquetLogbook:
             "signal_outcome", rows, PartitionInfo(symbol=symbol, date=date_str)
         )
 
+    def append_trade_recommendation(self, rows: List[Dict[str, Any]]) -> None:
+        if not rows:
+            return
+        symbol = rows[0]["symbol"]
+        ts_ms = rows[0].get("ts_ms")
+        date_str = self._today_utc_str(ts_ms)
+        self._write_rows(
+            "trade_recommendation", rows, PartitionInfo(symbol=symbol, date=date_str)
+        )
+
 
 __all__ = ["ParquetLogbook"]

@@ -6,62 +6,44 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
-from ui.lib.common import PAGE_HEADER_TITLE
+from ui.lib.common import PAGE_HEADER_TITLE, render_common_sidebar
 from ui.lib.settings_state import (
-    load_backtesting_settings,
-    save_backtesting_settings,
+    load_tracked_symbols,
+    save_tracked_symbols,
+    load_llm_settings,
+    save_llm_settings,
 )
+from ui.lib.logbook_utils import read_latest_file
+from src.utils.llm_client import LLMClient, LLMConfig
+import asyncio
 
 
 st.set_page_config(page_title="Settings", layout="wide")
 st.title(PAGE_HEADER_TITLE)
+with st.sidebar:
+    _symbol, _refresh, _show = render_common_sidebar(st)
 st.subheader("Settings")
-
-cfg = load_backtesting_settings()
-
-st.markdown("**Backtesting**")
-c1, c2, c3 = st.columns(3)
-with c1:
-    logical_max = st.number_input(
-        "Logical: max files",
-        min_value=1,
-        max_value=200,
-        value=int(cfg.get("logical_max_files", 10)),
-        step=1,
-        help="Number of latest files to read for logical test",
-    )
-with c2:
-    quality_max = st.number_input(
-        "Quality: max files (0=all)",
-        min_value=0,
-        max_value=5000,
-        value=int(cfg.get("quality_max_files", 0) or 0),
-        step=10,
-        help="0 means use all available files",
-    )
-with c3:
-    chart_points = st.number_input(
-        "Chart points",
-        min_value=50,
-        max_value=5000,
-        value=int(cfg.get("chart_points", 200)),
-        step=50,
-        help="Max points to plot in charts",
-    )
+st.markdown("**Tracked Symbols**")
+symbols = load_tracked_symbols()
+sym_text = st.text_input(
+    "Symbols (comma separated)",
+    value=", ".join(symbols) if symbols else "BTCUSDT",
+    help="Enter spot symbols like BTCUSDT, ETHUSDT",
+)
 
 
-def _save() -> None:
-    ok = save_backtesting_settings(
-        {
-            "logical_max_files": int(logical_max),
-            "quality_max_files": int(quality_max) if int(quality_max) > 0 else None,
-            "chart_points": int(chart_points),
-        }
-    )
+def _save_symbols() -> None:
+    parts = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
+    if not parts:
+        st.error("Provide at least one symbol")
+        return
+    ok = save_tracked_symbols(parts)
     if ok:
-        st.success("Saved")
+        st.success("Symbols saved")
     else:
-        st.error("Failed to save settings")
+        st.error("Failed to save symbols")
 
 
-st.button("Save", on_click=_save)
+st.button("Save Symbols", on_click=_save_symbols)
+
+st.divider()
