@@ -187,6 +187,15 @@ else:
 
     page_df["Delta"] = page_df.apply(_fmt_delta, axis=1)
 
+    # Confidence (if present in data); format to two decimals
+    if "confidence" in page_df.columns:
+        try:
+            page_df["Confidence"] = page_df["confidence"].astype(float).round(2)
+        except Exception:
+            page_df["Confidence"] = page_df["confidence"]
+    else:
+        page_df["Confidence"] = ""
+
     # LLM model column: from last request if available; else active config
     def _infer_llm_model() -> str:
         try:
@@ -239,6 +248,7 @@ else:
         "Signal price",
         "Current price",
         "Delta",
+        "Confidence",
         "LLM model",
     ]
     view = page_df[[c for c in view_cols if c in page_df.columns]].copy()
@@ -276,9 +286,14 @@ else:
                 out.append("")
         return out
 
-    styled = (
-        view.style.apply(_delta_style_col, subset=["Delta"])
-        if "Delta" in view.columns
-        else view
-    )
+    # Apply Confidence formatting (two decimals) and Delta color styling
+    styler = view.style
+    if "Confidence" in view.columns:
+        try:
+            styler = styler.format({"Confidence": "{:.2f}"})
+        except Exception:
+            pass
+    if "Delta" in view.columns:
+        styler = styler.apply(_delta_style_col, subset=["Delta"])
+    styled = styler
     st.dataframe(styled, use_container_width=True)

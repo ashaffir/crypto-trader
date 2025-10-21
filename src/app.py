@@ -189,6 +189,19 @@ async def pipeline() -> None:
                                     else "sell"
                                 )
                                 leverage = int(rec.get("leverage") or 1)
+                                # Optional confidence from LLM (0..1)
+                                conf_val = rec.get("confidence")
+                                try:
+                                    confidence = (
+                                        float(conf_val)
+                                        if conf_val is not None
+                                        else None
+                                    )
+                                    if confidence is not None:
+                                        if confidence < 0.0 or confidence > 1.0:
+                                            confidence = None
+                                except Exception:
+                                    confidence = None
                                 now_ms = int(__import__("time").time() * 1000)
                                 logbook.append_trade_recommendation(
                                     [
@@ -198,6 +211,11 @@ async def pipeline() -> None:
                                             "asset": asset,
                                             "direction": direction,
                                             "leverage": leverage,
+                                            **(
+                                                {"confidence": confidence}
+                                                if confidence is not None
+                                                else {}
+                                            ),
                                             "source": "llm",
                                         }
                                     ]
