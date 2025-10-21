@@ -97,3 +97,23 @@ def read_latest_file(table: str, symbol: str) -> pd.DataFrame:
 
 
 __all__ = ["tail_parquet_table", "read_latest_file"]
+
+
+def list_symbols_with_data(table: str) -> list[str]:
+    """Return symbols that have at least one parquet file under table/."""
+    base = os.path.join(LOGBOOK_DIR, table)
+    out: list[str] = []
+    try:
+        for name in os.listdir(base):
+            p = os.path.join(base, name)
+            if name.startswith("symbol=") and os.path.isdir(p):
+                sym = name.split("=", 1)[1]
+                # Ensure there is at least one file present
+                if glob.glob(os.path.join(p, "date=*", "*.parquet")):
+                    out.append(sym)
+    except Exception:
+        return []
+    return sorted(out)
+
+
+__all__.append("list_symbols_with_data")

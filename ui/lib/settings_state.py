@@ -101,6 +101,7 @@ def load_llm_settings(base_dir: str | None = None) -> dict:
         "active": "default",
         "window_seconds": 60,
         "refresh_seconds": 5,
+        "debug_save_request": False,
         "configs": {
             "default": {
                 "base_url": "",
@@ -113,7 +114,7 @@ def load_llm_settings(base_dir: str | None = None) -> dict:
     }
     if isinstance(raw, dict):
         # shallow merge for known keys
-        for k in ("active", "window_seconds", "refresh_seconds"):
+        for k in ("active", "window_seconds", "refresh_seconds", "debug_save_request"):
             if k in raw:
                 out[k] = raw[k]
         cfgs = raw.get("configs")
@@ -127,7 +128,13 @@ def save_llm_settings(settings: dict, base_dir: str | None = None) -> bool:
     cfg = _safe_read_json(path)
     merged = dict(cfg or {})
     keep: dict[str, object] = {}
-    for k in ("active", "window_seconds", "refresh_seconds", "configs"):
+    for k in (
+        "active",
+        "window_seconds",
+        "refresh_seconds",
+        "debug_save_request",
+        "configs",
+    ):
         if k in settings:
             keep[k] = settings[k]
     cur = load_llm_settings(base_dir)

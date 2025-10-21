@@ -74,6 +74,41 @@ def test_llm_parsing_and_trade_log_write():
         assert found
 
 
+def test_ollama_generate_parsing(monkeypatch):
+    # Simulate Ollama /api/generate server returning {response: "[ ... ]"}
+    cfg = LLMConfig(
+        base_url="https://llm.actappon.com", provider="Ollama", model="qwen2.5:7b"
+    )
+    client = LLMClient(cfg)
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "response": '[{"asset": "BTCUSDT", "direction": "buy", "leverage": 2}]'
+            }
+
+    class _Client:
+        async def post(self, url, headers=None, json=None):  # type: ignore
+            # Ensure endpoint normalization appends /api/generate
+            assert url.endswith("/api/generate")
+            return _Resp()
+
+        async def aclose(self):
+            return None
+
+    client._client = _Client()  # type: ignore
+
+    recs = asyncio.run(client.generate({"summary": {}}))
+    assert isinstance(recs, list) and len(recs) == 1
+    assert recs[0]["asset"] == "BTCUSDT"
+    assert recs[0]["leverage"] == 2
+
+
 def test_save_and_load_multiple_llm_configs(tmp_path, monkeypatch):
     # Redirect CONTROL_DIR used by settings_state to tmp
     monkeypatch.setenv("CONTROL_DIR", str(tmp_path))

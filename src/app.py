@@ -82,6 +82,7 @@ async def pipeline() -> None:
             name = active.get("name") if isinstance(active.get("name"), str) else None
             conf = LLMConfig(
                 base_url=str(active.get("base_url") or ""),
+                provider=(active.get("provider") or None),
                 api_key=(active.get("api_key") or None),
                 model=(active.get("model") or None),
                 system_prompt=(active.get("system_prompt") or None),
@@ -97,6 +98,26 @@ async def pipeline() -> None:
                 except Exception:
                     pass
             llm_client = LLMClient(conf)
+            # If debug_save_request enabled in runtime_config.json, set path
+            try:
+                overrides = runtime_cfg.read() or {}
+                llm_section = (
+                    overrides.get("llm") if isinstance(overrides, dict) else None
+                )
+                if isinstance(llm_section, dict) and llm_section.get(
+                    "debug_save_request"
+                ):
+                    import os
+
+                    base_dir = runtime_cfg.paths.base_dir
+                    os.makedirs(base_dir, exist_ok=True)
+                    llm_client.set_debug_save_path(
+                        os.path.join(base_dir, "llm_last_request.json")
+                    )
+                else:
+                    llm_client.set_debug_save_path(None)
+            except Exception:
+                pass
             llm_active_name = name
             logger.info("LLM client ready: from_llm_configs.json")
         except Exception as e:

@@ -68,10 +68,10 @@ def test_upsert_new_llm_config(temp_dir):
     """Test creating a new LLM config."""
     new_config = {
         "name": "test-llm",
-        "provider": "TestProvider",
+        "provider": "Ollama",
         "model": "test-model",
         "api_key": "key123",
-        "base_url": "https://test.com",
+        "base_url": "https://llm.actappon.com",
         "system_prompt": "Test system",
         "user_template": "Test user",
         "is_active": False,
@@ -82,7 +82,7 @@ def test_upsert_new_llm_config(temp_dir):
     configs = load_llm_configs(temp_dir)
     assert len(configs) == 1
     assert configs[0]["name"] == "test-llm"
-    assert configs[0]["provider"] == "TestProvider"
+    assert configs[0]["provider"] == "Ollama"
 
 
 def test_upsert_update_existing_llm_config(temp_dir):

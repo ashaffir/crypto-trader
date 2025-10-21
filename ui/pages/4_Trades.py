@@ -13,16 +13,28 @@ from ui.lib.common import (
     render_status_badge,
 )
 from ui.lib.settings_state import load_sidebar_settings
-from ui.lib.logbook_utils import tail_parquet_table
+from ui.lib.logbook_utils import tail_parquet_table, list_symbols_with_data
 
 
 st.set_page_config(page_title="Trades", layout="wide")
 st.title(PAGE_HEADER_TITLE)
 render_status_badge(st)
-# Use persisted sidebar settings but do not render the sidebar controls here
+
+# Build page-scoped symbol selector based on available data
 _persisted = load_sidebar_settings()
-symbol = _persisted.get("symbol", "BTCUSDT")
+_default_symbol = _persisted.get("symbol", "BTCUSDT")
+_available = list_symbols_with_data("trade_recommendation")
+
 st.subheader("Trades")
+if not _available:
+    st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
+    st.info("No trade data found in logbook.")
+    st.stop()
+
+symbol_index = _available.index(_default_symbol) if _default_symbol in _available else 0
+symbol = st.selectbox(
+    "Symbol", _available, index=symbol_index, key="trades_symbol_select"
+)
 st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
 
 df = tail_parquet_table("trade_recommendation", symbol, tail_files=50)

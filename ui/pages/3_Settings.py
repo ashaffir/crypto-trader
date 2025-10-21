@@ -175,6 +175,7 @@ with llm_col:
         # Build LLMConfig
         llm_cfg = LLMConfig(
             base_url=cfg_dict.get("base_url", ""),
+            provider=cfg_dict.get("provider"),
             api_key=cfg_dict.get("api_key"),
             model=cfg_dict.get("model"),
             system_prompt=cfg_dict.get("system_prompt"),
@@ -182,6 +183,18 @@ with llm_col:
         )
 
         client = LLMClient(llm_cfg)
+        # Honor debug flag during UI test
+        try:
+            cur_settings = load_llm_settings()
+            if bool(cur_settings.get("debug_save_request", False)):
+                import os
+
+                from ui.lib.common import CONTROL_DIR as _CTRL
+
+                os.makedirs(_CTRL, exist_ok=True)
+                client.set_debug_save_path(os.path.join(_CTRL, "llm_last_request.json"))
+        except Exception:
+            pass
         try:
             # Get real market data from logbook
             symbols = load_tracked_symbols()
@@ -240,7 +253,29 @@ with llm_col:
             await client.aclose()
 
     def _run_test_sync():
-        asyncio.run(_run_test())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            # Avoid nested event loop; run the async test in a background thread
+            import threading
+
+            _err = {"e": None}
+
+            def _runner():
+                try:
+                    asyncio.run(_run_test())
+                except Exception as e:  # noqa: BLE001
+                    _err["e"] = e
+
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+            t.join()
+            if _err["e"] is not None:
+                st.error(f"Test failed: {_err['e']}")
+        else:
+            asyncio.run(_run_test())
 
     with col1:
         st.button("Edit", on_click=_edit_llm, disabled=not buttons_enabled)
@@ -253,6 +288,22 @@ with llm_col:
 
     with col4:
         st.button("Run Test", on_click=_run_test_sync, disabled=not buttons_enabled)
+
+    # Debug: Save last request toggle (persists under runtime_config.json > llm)
+    st.markdown("---")
+    current_llm_settings = load_llm_settings()
+    dbg_enabled = bool(current_llm_settings.get("debug_save_request", False))
+    new_dbg = st.toggle(
+        "Save last LLM request to file",
+        value=dbg_enabled,
+        help="When enabled, the last LLM request payload and endpoint will be written to data/control/llm_last_request.json",
+    )
+    if new_dbg != dbg_enabled:
+        ok = save_llm_settings({"debug_save_request": bool(new_dbg)})
+        if ok:
+            st.success("✓ Debug setting saved")
+        else:
+            st.error("Failed to save debug setting")
 
 
 # ---- LLM Modal ----
@@ -278,16 +329,26 @@ def llm_config_modal():
         help="Unique identifier for this LLM configuration",
     )
 
-    provider = st.text_input(
+    provider = st.selectbox(
         "Provider",
-        value=existing.get("provider", "") if existing else "",
-        help="e.g., OpenAI, Anthropic, Custom",
+        options=["OpenAI-compatible", "Ollama"],
+        index=(
+            ["OpenAI-compatible", "Ollama"].index(
+                existing.get("provider", "OpenAI-compatible")
+            )
+            if existing and existing.get("provider") in ["OpenAI-compatible", "Ollama"]
+            else 0
+        ),
+        help="Select the provider type. 'Ollama' uses /api/generate.",
     )
 
+    _model_prefill = existing.get("model", "") if existing else ""
+    if not _model_prefill and provider == "Ollama":
+        _model_prefill = "qwen2.5:7b"
     model = st.text_input(
         "Model",
-        value=existing.get("model", "") if existing else "",
-        help="e.g., gpt-4, claude-3-opus, etc.",
+        value=_model_prefill,
+        help="e.g., gpt-4, claude-3-opus, or Ollama tag like qwen2.5:7b",
     )
 
     api_key = st.text_input(
@@ -297,10 +358,16 @@ def llm_config_modal():
         help="Your API key for this provider",
     )
 
+    # Prefill defaults for Ollama
+    default_base = existing.get("base_url", "") if existing else ""
+    if not default_base and provider == "Ollama":
+        default_base = "https://llm.actappon.com"
     base_url = st.text_input(
         "API Endpoint",
-        value=existing.get("base_url", "") if existing else "",
-        help="Base URL for API requests (e.g., https://api.openai.com)",
+        value=default_base,
+        help=(
+            "For OpenAI-compatible, host of the API; for Ollama, the server host (we will call /api/generate)."
+        ),
     )
 
     system_prompt = st.text_area(

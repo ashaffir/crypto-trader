@@ -11,6 +11,7 @@ from loguru import logger
 @dataclass
 class LLMConfig:
     base_url: str
+    provider: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -24,6 +25,8 @@ class LLMClient:
         # Debug snapshot of the last interaction to aid UI troubleshooting
         self._last_debug: Dict[str, Any] = {}
         logger.debug(f"LLMClient initialized with timeout={timeout}s")
+        # Optional: path to write last request for debugging (set via setter)
+        self._debug_save_path: Optional[str] = None
 
     async def aclose(self) -> None:
         try:
@@ -36,8 +39,13 @@ class LLMClient:
     ) -> Optional[List[Dict[str, Any]]]:
         logger.info(f"LLM generate called with model={self.cfg.model}")
 
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if self.cfg.api_key:
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        provider = (self.cfg.provider or "").strip().lower()
+        # Do not send Authorization for Ollama (server currently unauthenticated)
+        if self.cfg.api_key and provider != "ollama":
             headers["Authorization"] = f"Bearer {self.cfg.api_key}"
         # Build prompt
         system = (self.cfg.system_prompt or "You are a trading assistant.").strip()
@@ -70,33 +78,71 @@ class LLMClient:
         if "{DATA_WINDOW}" in formatted_user:
             formatted_user = formatted_user.replace("{DATA_WINDOW}", data_window_json)
 
-        payload: Dict[str, Any] = {
-            "model": self.cfg.model or "generic",
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": formatted_user},
-            ],
-        }
-        # Best-effort endpoint normalization for OpenAI-compatible providers
-        url = (self.cfg.base_url or "").strip()
-        if url.endswith("/"):
-            url = url[:-1]
-        lowered = url.lower()
-        if lowered and ("completions" not in lowered):
-            # Append default path if user only provided host
-            if "/v" not in lowered:
-                url = f"{url}/v1/chat/completions"
-            else:
-                # If version present but no completions path, append it
-                if not lowered.endswith("/chat/completions"):
-                    url = f"{url}/chat/completions"
+        # provider is already computed above
+
+        # Build payload and endpoint based on provider
+        if provider == "ollama":
+            # Ollama /api/generate expects a flat prompt string and returns {response: "..."}
+            # Combine system and user content to form a single prompt
+            prompt_parts: List[str] = []
+            if system:
+                prompt_parts.append(system)
+            if formatted_user:
+                prompt_parts.append(formatted_user)
+            prompt_text = "\n\n".join(prompt_parts)
+
+            payload = {
+                "model": (self.cfg.model or "qwen2.5:7b"),
+                "prompt": prompt_text,
+                "stream": False,
+            }
+
+            url = (self.cfg.base_url or "").strip()
+            if url.endswith("/"):
+                url = url[:-1]
+            lowered = url.lower()
+            if lowered and ("/api/generate" not in lowered):
+                url = f"{url}/api/generate"
+        else:
+            # Default: OpenAI-compatible chat completions
+            payload = {
+                "model": self.cfg.model or "generic",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": formatted_user},
+                ],
+            }
+            # Best-effort endpoint normalization for OpenAI-compatible providers
+            url = (self.cfg.base_url or "").strip()
+            if url.endswith("/"):
+                url = url[:-1]
+            lowered = url.lower()
+            if lowered and ("completions" not in lowered):
+                # Append default path if user only provided host
+                if "/v" not in lowered:
+                    url = f"{url}/v1/chat/completions"
+                else:
+                    # If version present but no completions path, append it
+                    if not lowered.endswith("/chat/completions"):
+                        url = f"{url}/chat/completions"
 
         self._last_debug = {
             "endpoint": url,
+            "provider": provider or None,
             "has_api_key": bool(self.cfg.api_key),
             "model": self.cfg.model,
             "payload_chars": len(json.dumps(payload)),
         }
+
+        # If debug path is set, write last request (overwrite)
+        try:
+            if self._debug_save_path:
+                with open(self._debug_save_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {"endpoint": url, "headers": headers, "payload": payload}, f
+                    )
+        except Exception:
+            pass
 
         logger.info(f"Sending request to {url}")
         logger.debug(f"Payload size: {self._last_debug['payload_chars']} chars")
@@ -146,6 +192,20 @@ class LLMClient:
                     text = msg.get("content")
         except Exception:
             text = None
+        # Ollama /api/generate: {response: "..."} or /api/chat: {message: {content: "..."}}
+        if text is None:
+            try:
+                if isinstance(data, dict) and isinstance(data.get("response"), str):
+                    text = data.get("response")
+                elif isinstance(data, dict) and isinstance(data.get("message"), dict):
+                    msg = data.get("message")
+                    text = (
+                        msg.get("content")
+                        if isinstance(msg.get("content"), str)
+                        else None
+                    )
+            except Exception:
+                pass
         if text is None:
             # Fallback: assume direct JSON in data["text"] or the body itself
             if isinstance(data, dict) and isinstance(data.get("text"), str):
@@ -221,6 +281,7 @@ class LLMClient:
         elif isinstance(parsed, list):
             # Empty list is valid (means no opportunities)
             if not parsed:
+                logger.info("Parsed recommendations: []")
                 return []
             for item in parsed:
                 if isinstance(item, dict):
@@ -244,11 +305,21 @@ class LLMClient:
             self._last_debug["validation_failures"] = validation_failures
             return None
 
+        # Printout of the parsed/validated trade data for visibility
+        try:
+            recs_json = json.dumps(recs, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            recs_json = str(recs)
+        logger.info(f"Parsed recommendations: {recs_json}")
+
         logger.info(f"Returning {len(recs)} valid recommendations")
         return recs
 
     def last_debug(self) -> Dict[str, Any]:
         return dict(self._last_debug)
+
+    def set_debug_save_path(self, path: Optional[str]) -> None:
+        self._debug_save_path = path
 
 
 __all__ = ["LLMClient", "LLMConfig"]
