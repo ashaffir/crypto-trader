@@ -13,8 +13,8 @@ if _ROOT not in _sys.path:
 from ui.lib.common import (
     LOGBOOK_DIR,
     CONTROL_DIR,
-    render_common_sidebar,
     PAGE_HEADER_TITLE,
+    render_status_badge,
 )
 from ui.lib.retention_utils import (
     iter_date_partitions,
@@ -93,8 +93,7 @@ except Exception:
 
 st.set_page_config(page_title="Data Tools", layout="wide")
 st.title(PAGE_HEADER_TITLE)
-with st.sidebar:
-    _symbol, _refresh, _show = render_common_sidebar(st)
+render_status_badge(st)
 st.subheader("Data Tools")
 st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
 

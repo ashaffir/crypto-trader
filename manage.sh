@@ -1,592 +1,587 @@
 #!/usr/bin/env bash
+# Crypto Trader Development & Deployment Manager
+# Interactive menu + CLI commands for dev, debug, and docker operations
 
-# Interactive project manager for development and deployment.
-# - Works with Docker Compose (prefers `docker compose`, falls back to `docker-compose`).
-# - Interactive menu (default), plus non-interactive subcommands for CI and scripts.
-# - Adds `doctor` (env diagnostics) and `dev` (local runs without Docker).
-# - Still supports flags: --help, --dry-run, --self-test, --file, --inspect, --prune.
-
-set -Eeuo pipefail
-IFS=$'\n\t'
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
-COMPOSE_FILE="${DEFAULT_COMPOSE_FILE}"
-DRY_RUN="false"
-FORCE_DOCKER_TOOL=""  # internal/testing override: docker|docker-compose
-CMD=""                 # subcommand, if provided
-CMD_ARGS=()            # subcommand args
+cd "$SCRIPT_DIR"
 
-color() {
-  local code="$1"; shift || true
-  if command -v tput >/dev/null 2>&1; then
-    tput setaf "$code" || true
-  fi
-}
+# Colors (only if terminal supports them)
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[1;33m'
+  BLUE='\033[0;34m'
+  CYAN='\033[0;36m'
+  NC='\033[0m'
+else
+  RED=''
+  GREEN=''
+  YELLOW=''
+  BLUE=''
+  CYAN=''
+  NC=''
+fi
 
-reset_color() {
-  if command -v tput >/dev/null 2>&1; then
-    tput sgr0 || true
-  fi
-}
+# Print functions
+info()    { printf "${CYAN}ℹ${NC}  %s\n" "$*"; }
+ok()      { printf "${GREEN}✓${NC} %s\n" "$*"; }
+warn()    { printf "${YELLOW}⚠${NC}  %s\n" "$*"; }
+error()   { printf "${RED}✗${NC} %s\n" "$*" >&2; }
+die()     { error "$*"; exit 1; }
+pause()   { echo; read -p "Press Enter to continue..." -r; echo; }
 
-notice() { printf "%s\n" "$*"; }
-info()   { printf "%s%s%s\n" "$(color 6)" "$*" "$(reset_color)"; }
-warn()   { printf "%s%s%s\n" "$(color 3)" "$*" "$(reset_color)"; }
-error()  { printf "%s%s%s\n" "$(color 1)" "$*" "$(reset_color)" 1>&2; }
-
-die() { error "Error: $*"; exit 1; }
-
-spinner_start() {
-  # no-op simple placeholder to avoid external deps; kept for future enhancement
-  :
-}
-
-spinner_stop() {
-  :
-}
-
-run_cmd() {
-  # Runs a command; when DRY_RUN=true, prints instead of executing
-  if [[ "$DRY_RUN" == "true" ]]; then
-    printf "DRY-RUN: %q" "$1"
-    shift || true
-    while (($#)); do printf " %q" "$1"; shift; done
-    printf "\n"
-    return 0
-  fi
-  "$@"
-}
-
+# Check if command exists
 have() { command -v "$1" >/dev/null 2>&1; }
 
-detect_dc() {
-  # Determine docker compose CLI (prefer modern 'docker compose')
-  local dc_cmd=""
-  if [[ -n "$FORCE_DOCKER_TOOL" ]]; then
-    case "$FORCE_DOCKER_TOOL" in
-      docker)         dc_cmd="docker compose" ;;
-      docker-compose) dc_cmd="docker-compose" ;;
-      *) die "Unknown FORCE_DOCKER_TOOL=$FORCE_DOCKER_TOOL" ;;
-    esac
+# Detect docker compose command
+detect_compose() {
+  if have docker && docker compose version &>/dev/null; then
+    echo "docker compose"
+  elif have docker-compose; then
+    echo "docker-compose"
   else
-    # Prefer legacy docker-compose first for environments without plugin
-    if have docker-compose && docker-compose version >/dev/null 2>&1; then
-      dc_cmd="docker-compose"
-    elif have docker && docker compose version >/dev/null 2>&1; then
-      dc_cmd="docker compose"
-    elif have docker && docker --help 2>&1 | grep -q "compose"; then
-      # Older docker may not support 'docker compose version' but has plugin
-      dc_cmd="docker compose"
+    die "Docker Compose not found"
+  fi
+}
+
+DC=$(detect_compose 2>/dev/null || echo "")
+
+#
+# Development Commands
+#
+
+cmd_dev_ui() {
+  local port="${1:-8501}"
+  info "Starting Streamlit UI on port ${port}..."
+  printf "${GREEN}→${NC} Open: http://localhost:${port}\n"
+  export PYTHONPATH="$SCRIPT_DIR"
+  exec streamlit run ui/Home.py \
+    --server.port="$port" \
+    --server.address=0.0.0.0 \
+    --server.runOnSave=true
+}
+
+cmd_dev_bot() {
+  info "Starting trading bot locally..."
+  export PYTHONPATH="$SCRIPT_DIR"
+  exec python3 -m src.supervisor "$@"
+}
+
+cmd_dev_test() {
+  local pattern="${1:-}"
+  if ! have pytest; then
+    die "pytest not found. Run: pip install -r requirements.txt"
+  fi
+  info "Running tests..."
+  export PYTHONPATH="$SCRIPT_DIR"
+  if [[ -n "$pattern" ]]; then
+    pytest -xvs -k "$pattern" tests/
+  else
+    pytest -xvs tests/
+  fi
+}
+
+cmd_dev_shell() {
+  info "Starting Python shell..."
+  export PYTHONPATH="$SCRIPT_DIR"
+  python3 <<'PYEOF'
+import sys
+sys.path.insert(0, '.')
+from src.config import load_config
+from src.utils.data_window import construct_data_window
+from src.utils.llm_client import LLMClient, LLMConfig
+from ui.lib.settings_state import *
+import pandas as pd
+import json
+
+print("Loaded: config, data_window, llm_client, settings_state, pandas, json")
+print()
+import code
+code.interact(local=locals())
+PYEOF
+}
+
+#
+# Debug Commands
+#
+
+cmd_debug_data() {
+  info "Logbook data summary:"
+  echo
+  
+  local logbook="$SCRIPT_DIR/data/logbook"
+  if [[ ! -d "$logbook" ]]; then
+    warn "No logbook directory: $logbook"
+    return
+  fi
+  
+  for table in market_snapshot signal_emitted signal_outcome trade_recommendation; do
+    local path="$logbook/$table"
+    if [[ -d "$path" ]]; then
+      local symbols=$(find "$path" -type d -name "symbol=*" 2>/dev/null | sed 's/.*symbol=//' | sort -u | tr '\n' ' ')
+      local file_count=$(find "$path" -name "*.parquet" 2>/dev/null | wc -l | tr -d ' ')
+      local size=$(du -sh "$path" 2>/dev/null | cut -f1)
+      
+      echo -e "${CYAN}$table${NC}"
+      echo "  Symbols: ${symbols:-none}"
+      echo "  Files:   $file_count"
+      echo "  Size:    $size"
+      echo
+    fi
+  done
+}
+
+cmd_debug_config() {
+  info "Configuration files:"
+  echo
+  for file in configs/config.yaml data/control/runtime_config.json data/control/llm_configs.json; do
+    if [[ -f "$file" ]]; then
+      echo -e "${GREEN}✓${NC} $file"
+      if [[ "$file" == *.json ]]; then
+        python3 -c "import json; print(json.dumps(json.load(open('$file')), indent=2))" 2>/dev/null || cat "$file"
+      else
+        cat "$file"
+      fi
+      echo
     else
-      dc_cmd=""
+      echo -e "${YELLOW}⚠${NC} $file (not found)"
     fi
-  fi
-
-  if [[ -z "$dc_cmd" ]]; then
-    warn "Neither 'docker compose' nor 'docker-compose' found."
-    warn "Menu will still work in --dry-run mode, but real actions require Docker."
-  fi
-
-  printf "%s" "$dc_cmd"
+  done
 }
 
-DC_BASE=""  # set in main
-
-dc() {
-  # Wrapper to run docker compose with our -f file
-  if [[ -z "$DC_BASE" ]]; then
-    DC_BASE="$(detect_dc)"
-  fi
-  if [[ -z "$DC_BASE" ]]; then
-    # Allow running in dry-run without docker installed
-    if [[ "$DRY_RUN" == "true" ]]; then
-      run_cmd echo "<docker-compose> -f" "$COMPOSE_FILE" "$@"
-      return 0
-    fi
-    die "Docker Compose CLI not found. Install Docker Desktop or docker-compose."
-  fi
-
-  run_cmd $DC_BASE -f "$COMPOSE_FILE" "$@"
+cmd_debug_symbols() {
+  info "Tracked symbols:"
+  export PYTHONPATH="$SCRIPT_DIR"
+  python3 <<'PYEOF'
+from ui.lib.settings_state import load_tracked_symbols
+symbols = load_tracked_symbols()
+if symbols:
+    for s in symbols:
+        print(f"  • {s}")
+else:
+    print("  (none)")
+PYEOF
 }
 
-list_services() {
-  # Prefer compose to list services; if unavailable, attempt to parse YAML minimally.
-  if [[ -n "$DC_BASE" ]] || have docker || have docker-compose; then
-    # 1) Use our wrapper
-    if services_out=$(dc config --services 2>/dev/null); then
-      if [[ -n "$services_out" ]]; then
-        printf "%s\n" "$services_out"
-        return 0
-      fi
-    fi
-    # 2) Try legacy docker-compose explicitly
-    if have docker-compose; then
-      if services_out=$(docker-compose -f "$COMPOSE_FILE" config --services 2>/dev/null); then
-        if [[ -n "$services_out" ]]; then
-          printf "%s\n" "$services_out"
-          return 0
-        fi
-      fi
-    fi
-    # 3) Try docker compose plugin explicitly
-    if have docker; then
-      if services_out=$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null); then
-        if [[ -n "$services_out" ]]; then
-          printf "%s\n" "$services_out"
-          return 0
-        fi
-      fi
-    fi
-  fi
-  # Fallback: naive YAML parse of service names under top-level 'services:'
-  # Note: this is a simple heuristic; adequate for local self-test without docker.
-  awk '
-    $0 ~ /^services:/ {in_services=1; next}
-    # two leading spaces then key:
-    in_services && match($0, /^[[:space:]][[:space:]]([A-Za-z0-9_.-]+):/, m) {print m[1]}
-    in_services && NF==0 {in_services=0}
-  ' "$COMPOSE_FILE" 2>/dev/null || true
+cmd_debug_llm() {
+  info "LLM configuration:"
+  export PYTHONPATH="$SCRIPT_DIR"
+  python3 <<'PYEOF'
+from ui.lib.settings_state import load_llm_configs, load_window_seconds
+configs = load_llm_configs()
+window = load_window_seconds()
+print(f"\nWindow Size: {window} seconds\n")
+print(f"Configured LLMs: {len(configs)}\n")
+for cfg in configs:
+    active = "✓ ACTIVE" if cfg.get("is_active") else ""
+    print(f"  • {cfg.get('name')} {active}")
+    print(f"    Provider: {cfg.get('provider')}")
+    print(f"    Model: {cfg.get('model')}")
+    print(f"    Endpoint: {cfg.get('base_url')}")
+    print(f"    API Key: {'*' * 20 if cfg.get('api_key') else '(none)'}")
+PYEOF
 }
 
-confirm() {
-  local prompt=${1:-"Are you sure?"}
-  local default=${2:-"n"}
-  local ans
-  if [[ "$default" == "y" ]]; then
-    read -r -p "${prompt} [Y/n] " ans || true
-    ans=${ans:-Y}
+cmd_debug_window() {
+  local seconds="${1:-60}"
+  info "Testing DATA_WINDOW (${seconds}s)..."
+  export PYTHONPATH="$SCRIPT_DIR"
+  python3 <<PYEOF
+import json
+from src.utils.data_window import construct_data_window
+from ui.lib.settings_state import load_tracked_symbols
+symbols = load_tracked_symbols()
+print(f"Symbols: {symbols}")
+try:
+    data = construct_data_window("data/logbook", symbols, ${seconds})
+    print(f"\nTimestamp: {data['timestamp']}")
+    print(f"Window: {data['window_seconds']}s")
+    print(f"Assets: {len(data['assets'])}\n")
+    for asset in data['assets']:
+        print(f"  {asset['symbol']}:")
+        print(f"    Samples:      {len(asset['recent_prices'])} prices")
+        print(f"    Price change: {asset['price_change_bps']:+.2f} bps")
+        print(f"    Volume total: {asset['volume_total']:.2f}")
+        if asset['recent_prices']:
+            print(f"    Price range:  {asset['recent_prices'][0]:.2f} → {asset['recent_prices'][-1]:.2f}")
+        print()
+    print(f"JSON size: {len(json.dumps(data))} bytes")
+except Exception as e:
+    print(f"Error: {e}")
+    import traceback
+    traceback.print_exc()
+PYEOF
+}
+
+cmd_debug_parquet() {
+  export PYTHONPATH="$SCRIPT_DIR"
+  python3 src/parquet_inspector.py "$@"
+}
+
+#
+# Docker Commands
+#
+
+cmd_up() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  if [[ "${1:-}" == "fg" ]]; then
+    info "Starting services (foreground)..."
+    $DC up
   else
-    read -r -p "${prompt} [y/N] " ans || true
-    ans=${ans:-N}
+    info "Starting services (background)..."
+    $DC up -d
+    ok "Services started"
   fi
-  [[ "$ans" == "y" || "$ans" == "Y" ]]
 }
 
-choose_service() {
-  local services=()
-  while IFS= read -r svc; do
-    [[ -n "$svc" ]] && services+=("$svc")
-  done < <(list_services)
-  if ((${#services[@]}==0)); then
-    die "No services found in compose file: $COMPOSE_FILE"
-  fi
-  (
-    # Subshell: redirect menu and prompts to stderr; print selection to stdout
-    exec 3>&1
-    exec 1>&2
-    printf "Select a service:\n"
-    select svc in "${services[@]}"; do
-      if [[ -n "${svc:-}" ]]; then
-        printf "%s" "$svc" >&3
-        break
-      fi
-      printf "Invalid selection.\n" 1>&2
-    done
-  )
+cmd_down() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  info "Stopping services..."
+  $DC down
+  ok "Services stopped"
 }
 
-choose_shell() {
-  local choices=("bash" "sh" "python" "custom")
-  notice "Select a shell/command:"
-  select c in "${choices[@]}"; do
-    case "$c" in
-      bash|sh|python) printf "%s" "$c"; return 0 ;;
-      custom)
-        read -r -p "Enter custom command: " cmd
-        printf "%s" "$cmd"; return 0 ;;
-      *) warn "Invalid selection." ;;
+cmd_restart() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  local svc="${1:-}"
+  if [[ -n "$svc" ]]; then
+    info "Restarting $svc..."
+    $DC restart "$svc"
+  else
+    info "Restarting all services..."
+    $DC restart
+  fi
+  ok "Restarted"
+}
+
+cmd_logs() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  local svc="${1:-}"
+  local follow="${2:-}"
+  if [[ "$follow" == "-f" || "$follow" == "--follow" ]]; then
+    $DC logs -f --tail=100 $svc
+  else
+    $DC logs --tail=100 $svc
+  fi
+}
+
+cmd_build() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  info "Building images..."
+  $DC build --no-cache
+  ok "Build complete"
+}
+
+cmd_build_restart() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  info "Building images..."
+  $DC build --no-cache
+  ok "Build complete"
+  echo
+  info "Stopping services..."
+  $DC down
+  ok "Services stopped"
+  echo
+  info "Starting services..."
+  $DC up -d
+  ok "Services started"
+}
+
+cmd_ps() {
+  [[ -z "$DC" ]] && die "Docker Compose not available"
+  $DC ps
+}
+
+#
+# Maintenance
+#
+
+cmd_clean() {
+  info "Cleaning Python cache..."
+  find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+  find . -type f -name "*.pyc" -delete 2>/dev/null || true
+  find . -type f -name "*.pyo" -delete 2>/dev/null || true
+  ok "Cache cleaned"
+}
+
+cmd_doctor() {
+  info "Running diagnostics...\n"
+  have python3 && ok "python3: $(python3 --version)" || error "python3 not found"
+  python3 -c "import streamlit" 2>/dev/null && ok "streamlit installed" || error "streamlit not installed"
+  python3 -c "import pytest" 2>/dev/null && ok "pytest installed" || warn "pytest not installed"
+  have docker && ok "docker: $(docker --version)" || warn "docker not found"
+  [[ -n "$DC" ]] && ok "docker compose available" || warn "docker compose not available"
+  
+  for dir in data/logbook data/control configs; do
+    [[ -d "$dir" ]] && ok "directory: $dir" || error "missing: $dir"
+  done
+  
+  for file in configs/config.yaml requirements.txt; do
+    [[ -f "$file" ]] && ok "file: $file" || error "missing: $file"
+  done
+  
+  echo
+  info "Diagnostics complete"
+}
+
+#
+# Interactive Menu
+#
+
+show_header() {
+  clear
+  printf "${BLUE}╔══════════════════════════════════════════════╗${NC}\n"
+  printf "${BLUE}║      Crypto Trader - Manager v2.0           ║${NC}\n"
+  printf "${BLUE}╚══════════════════════════════════════════════╝${NC}\n"
+  echo
+}
+
+docker_management_menu() {
+  while true; do
+    show_header
+    printf "${BLUE}🐋 Docker Management${NC}\n"
+    echo "====================="
+    echo
+    
+    printf "${CYAN}Current Status:${NC}\n"
+    if [[ -n "$DC" ]] && $DC ps 2>/dev/null | grep -q "Up"; then
+      printf "  ${GREEN}✓${NC} Services running\n"
+      $DC ps
+    else
+      printf "  ${YELLOW}○${NC} Services stopped\n"
+    fi
+    echo
+    
+    printf "${YELLOW}📋 Available Actions:${NC}\n"
+    echo "======================"
+    printf "  ${CYAN}1)${NC} 🚀 Start services\n"
+    printf "  ${CYAN}2)${NC} 🛑 Stop services\n"
+    printf "  ${CYAN}3)${NC} 🔄 Restart services\n"
+    printf "  ${CYAN}4)${NC} 📋 View logs\n"
+    printf "  ${CYAN}5)${NC} 🔨 Build images\n"
+    printf "  ${CYAN}6)${NC} 🔨🔄 Build & Restart\n"
+    printf "  ${CYAN}7)${NC} 📊 Show containers\n"
+    printf "  ${CYAN}b)${NC} ⬅️  Back to main menu\n"
+    echo
+    
+    printf "${CYAN}Choice:${NC} "
+    read -r choice
+    echo
+    
+    case "$choice" in
+      1) cmd_up; pause ;;
+      2) cmd_down; pause ;;
+      3) cmd_restart; pause ;;
+      4)
+        read -p "Service name (or leave empty for all): " svc
+        cmd_logs "$svc" "--follow"
+        ;;
+      5) cmd_build; pause ;;
+      6) cmd_build_restart; pause ;;
+      7) cmd_ps; pause ;;
+      b|B) return ;;
+      *) error "Invalid choice"; sleep 1 ;;
     esac
   done
 }
 
-action_build()      { dc build; }
-action_pull()       { dc pull; }
-action_up_detached(){ dc up -d; }
-action_up_fg()      { dc up; }
-action_down()       { confirm "This will stop and remove containers. Proceed?" n && dc down || notice "Cancelled."; }
-action_ps()         { dc ps; }
-action_logs_follow(){ local s; s=$(choose_service); dc logs -f "$s"; }
-action_logs_once()  { local s; s=$(choose_service); dc logs --tail=200 "$s"; }
-action_restart_svc(){ local s; s=$(choose_service); dc restart "$s"; }
-action_stop_svc()   { local s; s=$(choose_service); dc stop "$s"; }
-action_start_all()  { action_up_detached; }
-action_stop_all()   { dc stop; }
-action_restart_all(){ dc restart; }
-action_build_restart_all() { dc up -d --build; }
-action_build_restart_svc() { local s; s=$(choose_service); dc up -d --build "$s"; }
-action_exec()       {
-  local s; s=$(choose_service)
-  local cmd; cmd=$(choose_shell)
-  # If cmd is bash/sh, run interactive tty
-  case "$cmd" in
-    bash|sh) dc exec -it "$s" "$cmd" ;;
-    *)       dc exec "$s" sh -lc "$cmd" ;;
-  esac
-}
-action_rebuild_nocache(){ dc build --no-cache; }
-action_config()     { dc config; }
-action_prune()      {
-  warn "This will prune dangling images and unused volumes (not in use)."
-  if confirm "Run docker image prune -f and volume prune -f?" n; then
-    run_cmd docker image prune -f
-    run_cmd docker volume prune -f
+show_status() {
+  printf "${BLUE}📊 Status:${NC}\n"
+  echo "=========="
+  
+  # Check if services are running
+  if [[ -n "$DC" ]] && $DC ps 2>/dev/null | grep -q "Up"; then
+    printf "  ${GREEN}✓${NC} Docker services running\n"
   else
-    notice "Cancelled."
+    printf "  ${YELLOW}○${NC} Docker services stopped\n"
   fi
+  
+  # Check data
+  local logbook="data/logbook/market_snapshot"
+  if [[ -d "$logbook" ]]; then
+    local files=$(find "$logbook" -name "*.parquet" 2>/dev/null | wc -l | tr -d ' ')
+    printf "  ${GREEN}✓${NC} Data: $files parquet files\n"
+  else
+    printf "  ${YELLOW}○${NC} No data collected yet\n"
+  fi
+  
+  echo
 }
 
-print_menu() {
-  cat <<'EOF'
-Choose an action:
-  1) Build images
-  2) Pull images
-  3) Up (detached)
-  4) Up (foreground)
-  5) Down (stop & remove)
-  6) Status (ps)
-  7) Logs (follow)
-  8) Logs (once)
-  9) Restart service
- 10) Stop service
- 11) Exec into service
- 12) Rebuild (no-cache)
- 13) Show compose config
- 14) Prune (dangling images/volumes)
- 15) Start all
- 16) Stop all
- 17) Restart all
- 18) Build & Restart (all)
- 19) Build & Restart (service)
- 20) Exit
-EOF
+show_menu() {
+  show_header
+  show_status
+  
+  printf "${GREEN}Development:${NC}\n"
+  printf "  ${CYAN}1)${NC} Start UI\n"
+  printf "  ${CYAN}2)${NC} Start Bot\n"
+  printf "  ${CYAN}3)${NC} Run Tests\n"
+  printf "  ${CYAN}4)${NC} Python Shell\n"
+  echo
+  printf "${GREEN}Debug:${NC}\n"
+  printf "  ${CYAN}5)${NC} Show Data Summary\n"
+  printf "  ${CYAN}6)${NC} Show Config\n"
+  printf "  ${CYAN}7)${NC} Show LLM Config\n"
+  printf "  ${CYAN}8)${NC} Test Data Window\n"
+  printf "  ${CYAN}9)${NC} Inspect Parquet\n"
+  echo
+  printf "${GREEN}Docker:${NC}\n"
+  printf "  ${CYAN}10)${NC} 🐋 Docker Management\n"
+  echo
+  printf "${GREEN}Other:${NC}\n"
+  printf "  ${CYAN}11)${NC} Clean Cache\n"
+  printf "  ${CYAN}12)${NC} Diagnostics\n"
+  printf "  ${CYAN}h)${NC}  Help / CLI Usage\n"
+  printf "  ${CYAN}q)${NC}  Quit\n"
+  echo
 }
 
 interactive_menu() {
-  local choice
   while true; do
-    print_menu
-    read -r -p "Enter choice [1-20]: " choice || true
+    show_menu
+    printf "${CYAN}Choice:${NC} "
+    read -r choice
+    echo
+    
     case "$choice" in
-      1)  action_build ;;
-      2)  action_pull ;;
-      3)  action_up_detached ;;
-      4)  action_up_fg ;;
-      5)  action_down ;;
-      6)  action_ps ;;
-      7)  action_logs_follow ;;
-      8)  action_logs_once ;;
-      9)  action_restart_svc ;;
-      10) action_stop_svc ;;
-      11) action_exec ;;
-      12) action_rebuild_nocache ;;
-      13) action_config ;;
-      14) action_prune ;;
-      15) action_start_all ;;
-      16) action_stop_all ;;
-      17) action_restart_all ;;
-      18) action_build_restart_all ;;
-      19) action_build_restart_svc ;;
-      20) notice "Bye!"; break ;;
-      *)  warn "Invalid choice." ;;
+      1) cmd_dev_ui ;;
+      2) cmd_dev_bot ;;
+      3) cmd_dev_test; pause ;;
+      4) cmd_dev_shell ;;
+      5) cmd_debug_data; pause ;;
+      6) cmd_debug_config; pause ;;
+      7) cmd_debug_llm; pause ;;
+      8)
+        read -p "Window size in seconds [60]: " secs
+        cmd_debug_window "${secs:-60}"
+        pause
+        ;;
+      9)
+        read -p "Command (e.g., 'list' or 'head market_snapshot BTCUSDT'): " args
+        cmd_debug_parquet $args
+        pause
+        ;;
+      10) docker_management_menu ;;
+      11) cmd_clean; pause ;;
+      12) cmd_doctor; pause ;;
+      h|H) show_cli_help; pause ;;
+      q|Q) info "Goodbye!"; exit 0 ;;
+      *) error "Invalid choice"; sleep 1 ;;
     esac
   done
 }
 
-usage() {
-  cat <<EOF
-Usage: $(basename "$0") [options]
-
-Options:
-  -f, --file PATH     Compose file to use (default: ${COMPOSE_FILE})
-      --dry-run       Print commands instead of executing
-      --self-test     Run internal self-test without requiring Docker
-      --print-dc      Print detected compose command and exit
-      --inspect ARGS  Run parquet inspector (passes ARGS to python src/parquet_inspector.py)
-      --prune  ARGS   Run data retention pruner (passes ARGS to python src/data_retention.py)
-      --use-docker-compose  Force legacy docker-compose CLI
-      --use-docker          Force docker compose plugin CLI
-  -h, --help          Show this help
-
-Commands (non-interactive):
-  up [fg|detached]           Start all services (default: detached)
-  down                       Stop and remove containers
-  ps                         Show service status
-  build [--no-cache]         Build images
-  pull                       Pull images
-  logs [svc] [follow]        Show logs (follow if specified)
-  restart [svc]              Restart a service (prompt if missing)
-  stop [svc]                 Stop a service (prompt if missing)
-  start-all                  Start all services (alias for 'up detached')
-  stop-all                   Stop all services (no removal)
-  restart-all                Restart all services
-  build-restart [all|svc]    Build images and restart service(s)
-  exec [svc] [bash|sh|python|-- cmd]
-                             Exec into service; with '--', run custom command
-  config                     Show composed config
-  prune-docker               Prune dangling images/volumes
-  doctor                     Run environment diagnostics
-  dev bot                    Run bot locally: python -m src.supervisor
-  dev ui [--port 8501]       Run UI locally: streamlit run ui/ui_app.py
-
-Without a command, an interactive menu is shown.
-EOF
+show_cli_help() {
+  printf "${CYAN}CLI Usage:${NC} ./manage.sh <command> [options]\n\n"
+  
+  printf "${GREEN}Development:${NC}\n"
+  echo "  dev ui [--port 8501]    Start Streamlit UI"
+  echo "  dev bot [opts]          Start trading bot"
+  echo "  dev test [pattern]      Run tests"
+  echo "  dev shell               Python shell"
+  echo
+  
+  printf "${GREEN}Debug:${NC}\n"
+  echo "  debug data              Show data summary"
+  echo "  debug config            Show config files"
+  echo "  debug symbols           Show tracked symbols"
+  echo "  debug llm               Show LLM config"
+  echo "  debug window [secs]     Test DATA_WINDOW"
+  echo "  debug parquet <args>    Inspect parquet files"
+  echo
+  
+  printf "${GREEN}Docker:${NC}\n"
+  echo "  up [fg]                 Start services"
+  echo "  down                    Stop services"
+  echo "  restart [service]       Restart service(s)"
+  echo "  logs [service] [-f]     View logs"
+  echo "  build                   Build images"
+  echo "  build-restart           Build & restart"
+  echo "  ps                      Show containers"
+  echo
+  
+  printf "${GREEN}Maintenance:${NC}\n"
+  echo "  clean                   Clean cache"
+  echo "  doctor                  Run diagnostics"
+  echo
+  
+  printf "${GREEN}Examples:${NC}\n"
+  echo "  ./manage.sh dev ui --port 8502"
+  echo "  ./manage.sh debug window 120"
+  echo "  ./manage.sh logs bot --follow"
+  echo "  ./manage.sh                    # Interactive menu"
+  echo
 }
 
-self_test() {
-  notice "Running self-test in dry-run mode..."
-  local prev_dry="$DRY_RUN"; DRY_RUN="true"
-  FORCE_DOCKER_TOOL=""  # ensure detection runs
-  DC_BASE=""            # reset
-
-  notice "1) Detect compose command"
-  local dc_detected
-  dc_detected="$(detect_dc || true)"
-  if [[ -z "$dc_detected" ]]; then
-    notice "   docker compose not found (OK for self-test)"
-  else
-    notice "   detected: $dc_detected"
-  fi
-
-  notice "2) List services (fallback parse if needed)"
-  local svcs
-  svcs="$(list_services || true)"
-  if [[ -z "$svcs" ]]; then
-    warn "   No services detected in $COMPOSE_FILE"
-  else
-    notice "   services: $(echo "$svcs" | tr '\n' ' ')"
-  fi
-
-  notice "3) Simulate common actions"
-  DC_BASE="docker compose"  # pretend for printing
-  action_build
-  action_up_detached
-  action_ps
-  DRY_RUN="$prev_dry"
-  notice "Self-test complete."
-}
-
-parse_args() {
-  while (($#)); do
-    case "$1" in
-      -f|--file)
-        shift; [[ $# -gt 0 ]] || die "--file requires a path"
-        COMPOSE_FILE="$1"
-        ;;
-      --dry-run)
-        DRY_RUN="true"
-        ;;
-      --self-test)
-        self_test; exit 0
-        ;;
-      --print-dc)
-        DC_BASE="$(detect_dc)"; printf "%s\n" "${DC_BASE:-<not found>}"; exit 0
-        ;;
-      --use-docker-compose)
-        FORCE_DOCKER_TOOL="docker-compose"
-        ;;
-      --use-docker)
-        FORCE_DOCKER_TOOL="docker"
-        ;;
-      --inspect)
-        shift || die "--inspect requires ARGS (e.g., 'list' or 'head market_snapshot BTCUSDT')"
-        # pass all remaining args to inspector
-        PYTHONPATH="$SCRIPT_DIR" python3 "$SCRIPT_DIR/src/parquet_inspector.py" "$@"
-        exit $?
-        ;;
-      --prune)
-        shift || die "--prune requires ARGS (e.g., '--max-days 7' or '--size-cap 50GB')"
-        PYTHONPATH="$SCRIPT_DIR" python3 "$SCRIPT_DIR/src/data_retention.py" "$@"
-        exit $?
-        ;;
-      -h|--help)
-        usage; exit 0
-        ;;
-      --)
-        shift || true
-        ;;
-      -* )
-        die "Unknown argument: $1"
-        ;;
-      * )
-        # First non-option -> treat as subcommand; rest are its args
-        CMD="$1"; shift || true
-        CMD_ARGS=("$@")
-        return 0
-        ;;
-    esac
-    shift || true
-  done
-}
-
-doctor() {
-  notice "Running diagnostics..."
-  # Docker and Compose
-  local docker_ok="no" compose_cmd
-  if have docker; then
-    docker_ok="yes"
-    notice "docker: $(docker --version 2>/dev/null || echo not found)"
-  else
-    warn "docker not found"
-  fi
-  compose_cmd="$(detect_dc || true)"
-  if [[ -n "$compose_cmd" ]]; then
-    notice "compose: $compose_cmd"
-    run_cmd $compose_cmd version || true
-  else
-    warn "docker compose/compose plugin not available"
-  fi
-
-  # Python & Streamlit (for local dev)
-  if have python3; then
-    notice "python3: $(python3 -V 2>/dev/null)"
-  else
-    warn "python3 not found"
-  fi
-  if have streamlit; then
-    notice "streamlit: $(streamlit --version 2>/dev/null)"
-  else
-    warn "streamlit CLI not found"
-  fi
-
-  # Paths and permissions
-  local paths=("$SCRIPT_DIR/configs" "$SCRIPT_DIR/data/logbook" "$SCRIPT_DIR/data/control" "$COMPOSE_FILE")
-  for p in "${paths[@]}"; do
-    if [[ -e "$p" ]]; then
-      notice "exists: $p"
-    else
-      warn "missing: $p"
-    fi
-  done
-  mkdir -p "$SCRIPT_DIR/data/logbook" "$SCRIPT_DIR/data/control" 2>/dev/null || true
-  if [[ -w "$SCRIPT_DIR/data/logbook" && -w "$SCRIPT_DIR/data/control" ]]; then
-    notice "data dirs writable"
-  else
-    warn "data dirs not writable"
-  fi
-
-  # Compose services
-  local svcs
-  svcs="$(list_services || true)"
-  if [[ -n "$svcs" ]]; then
-    notice "services: $(echo "$svcs" | tr '\n' ' ')"
-  else
-    warn "no services detected in $COMPOSE_FILE"
-  fi
-  notice "Diagnostics complete."
-}
-
-run_dev() {
-  local what="$1"; shift || true
-  case "$what" in
-    bot)
-      notice "Starting local bot (python -m src.supervisor)"
-      PYTHONPATH="$SCRIPT_DIR" run_cmd python3 -m src.supervisor "$@"
-      ;;
-    ui)
-      local port="8501"
-      while (($#)); do
-        case "$1" in
-          --port) shift; port="$1" ;;
-          *) break ;;
-        esac
-        shift || true
-      done
-      notice "Starting local UI on :$port"
-      PYTHONPATH="$SCRIPT_DIR" run_cmd streamlit run "$SCRIPT_DIR/ui/ui_app.py" --server.port="$port" --server.address=0.0.0.0 "$@"
-      ;;
-    *)
-      die "Unknown dev target: ${what:-<empty>}"
-      ;;
-  esac
-}
-
-run_command() {
-  local cmd="$1"; shift || true
-  case "$cmd" in
-    up)
-      local mode="detached"
-      if [[ "${1:-}" == "fg" || "${1:-}" == "foreground" ]]; then
-        mode="fg"; shift || true
-      fi
-      if [[ "$mode" == "fg" ]]; then action_up_fg; else action_up_detached; fi
-      ;;
-    down) action_down ;;
-    ps) action_ps ;;
-    build)
-      if [[ "${1:-}" == "--no-cache" ]]; then action_rebuild_nocache; else action_build; fi
-      ;;
-    pull) action_pull ;;
-    logs)
-      local s="${1:-}"
-      if [[ -n "$s" ]]; then shift || true; else s="$(choose_service)"; fi
-      if [[ "${1:-}" == "follow" ]]; then dc logs -f "$s"; else dc logs --tail=200 "$s"; fi
-      ;;
-    restart)
-      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; fi; dc restart "$s"
-      ;;
-    stop)
-      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; fi; dc stop "$s"
-      ;;
-    start-all)
-      action_start_all
-      ;;
-    stop-all)
-      action_stop_all
-      ;;
-    restart-all)
-      action_restart_all
-      ;;
-    build-restart)
-      local target="${1:-}"
-      if [[ -z "$target" ]]; then
-        target="$(choose_service)"
-      fi
-      if [[ "$target" == "all" ]]; then
-        dc up -d --build
-      else
-        dc up -d --build "$target"
-      fi
-      ;;
-    exec)
-      local s="${1:-}"; if [[ -z "$s" ]]; then s="$(choose_service)"; else shift || true; fi
-      if [[ "${1:-}" == "bash" || "${1:-}" == "sh" || "${1:-}" == "python" ]]; then
-        local shell="$1"; shift || true
-        if [[ "$shell" == "bash" || "$shell" == "sh" ]]; then dc exec -it "$s" "$shell"; else dc exec "$s" sh -lc "$shell"; fi
-      else
-        if [[ "${1:-}" == "--" ]]; then shift || true; fi
-        if (($#)); then dc exec "$s" sh -lc "$*"; else dc exec -it "$s" sh; fi
-      fi
-      ;;
-    config) action_config ;;
-    prune-docker) action_prune ;;
-    doctor) doctor ;;
-    dev) run_dev "$@" ;;
-    *)
-      die "Unknown command: $cmd"
-      ;;
-  esac
-}
+#
+# Main
+#
 
 main() {
-  parse_args "$@"
-  if [[ ! -f "$COMPOSE_FILE" ]]; then
-    die "Compose file not found: $COMPOSE_FILE"
-  fi
-  trap 'printf "\n"; warn "Interrupted."; exit 130' INT
-  DC_BASE="$(detect_dc)" || true
-  if [[ -n "$CMD" ]]; then
-    # Safely expand CMD_ARGS under 'set -u' when it may be unset or empty
-    if [[ ${#CMD_ARGS[@]:-0} -gt 0 ]]; then
-      run_command "$CMD" "${CMD_ARGS[@]}"
-    else
-      run_command "$CMD"
-    fi
-  else
+  # No arguments = interactive menu
+  if [[ $# -eq 0 ]]; then
     interactive_menu
+    exit 0
   fi
+  
+  # Parse CLI commands
+  local cmd="$1"
+  shift || true
+  
+  case "$cmd" in
+    # Development
+    dev)
+      local subcmd="${1:-}"
+      shift || true
+      case "$subcmd" in
+        ui) cmd_dev_ui "$@" ;;
+        bot) cmd_dev_bot "$@" ;;
+        test) cmd_dev_test "$@" ;;
+        shell) cmd_dev_shell ;;
+        *) die "Unknown dev command: $subcmd" ;;
+      esac
+      ;;
+    
+    # Debug
+    debug)
+      local subcmd="${1:-}"
+      shift || true
+      case "$subcmd" in
+        data) cmd_debug_data ;;
+        config) cmd_debug_config ;;
+        symbols) cmd_debug_symbols ;;
+        llm) cmd_debug_llm ;;
+        window) cmd_debug_window "$@" ;;
+        parquet) cmd_debug_parquet "$@" ;;
+        *) die "Unknown debug command: $subcmd" ;;
+      esac
+      ;;
+    
+    # Docker
+    up) cmd_up "$@" ;;
+    down) cmd_down ;;
+    restart) cmd_restart "$@" ;;
+    logs) cmd_logs "$@" ;;
+    build) cmd_build ;;
+    build-restart) cmd_build_restart ;;
+    ps) cmd_ps ;;
+    
+    # Maintenance
+    clean) cmd_clean ;;
+    doctor) cmd_doctor ;;
+    
+    # Help
+    -h|--help|help) show_cli_help ;;
+    
+    *)
+      error "Unknown command: $cmd"
+      echo
+      show_cli_help
+      exit 1
+      ;;
+  esac
 }
 
 main "$@"
-
-

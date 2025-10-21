@@ -52,8 +52,8 @@ async def pipeline() -> None:
     llm_window_s: int = 30
     llm_refresh_s: int = 5
 
-    def _rebuild_llm_client(overrides: Dict | None) -> None:
-        nonlocal llm_client, llm_active_name, llm_window_s, llm_refresh_s
+    def _apply_llm_timing(overrides: Dict | None) -> None:
+        nonlocal llm_window_s, llm_refresh_s
         if overrides is None:
             return
         llm = overrides.get("llm") if isinstance(overrides, dict) else None
@@ -69,34 +69,47 @@ async def pipeline() -> None:
             )
         except Exception:
             pass
-        active = llm.get("active") if isinstance(llm.get("active"), str) else None
-        configs = llm.get("configs") if isinstance(llm.get("configs"), dict) else None
-        if active and configs and isinstance(configs.get(active), dict):
-            conf = configs[active]
-            new_cfg = LLMConfig(
-                base_url=str(conf.get("base_url")),
-                api_key=(conf.get("api_key") or None),
-                model=(conf.get("model") or None),
-                system_prompt=(conf.get("system_prompt") or None),
-                user_template=(conf.get("user_template") or None),
-            )
-            # Only rebuild when active name or essential params changed
-            if llm_active_name != active:
-                if llm_client is not None:
-                    try:
-                        # Close old client
-                        import anyio
 
-                        anyio.from_thread.run(llm_client.aclose)  # best-effort
-                    except Exception:
-                        pass
-                llm_client = LLMClient(new_cfg)
-                llm_active_name = active
+    def _rebuild_llm_client_from_llm_configs(initial: bool = False) -> None:
+        nonlocal llm_client, llm_active_name
+        try:
+            changed, doc = runtime_cfg.load_llm_configs_if_changed()
+            if not changed and not initial:
+                return
+            active = RuntimeConfigManager.get_active_llm_config_from(doc)
+            if not isinstance(active, dict):
+                return
+            name = active.get("name") if isinstance(active.get("name"), str) else None
+            conf = LLMConfig(
+                base_url=str(active.get("base_url") or ""),
+                api_key=(active.get("api_key") or None),
+                model=(active.get("model") or None),
+                system_prompt=(active.get("system_prompt") or None),
+                user_template=(active.get("user_template") or None),
+            )
+            if llm_active_name == name and llm_client is not None:
+                return
+            if llm_client is not None:
+                try:
+                    import anyio
+
+                    anyio.from_thread.run(llm_client.aclose)
+                except Exception:
+                    pass
+            llm_client = LLMClient(conf)
+            llm_active_name = name
+            logger.info("LLM client ready: from_llm_configs.json")
+        except Exception as e:
+            logger.warning(f"Failed to load llm_configs.json: {e}")
 
     async def llm_loop() -> None:
         nonlocal llm_client, llm_window_s, llm_refresh_s
+        # Initialize from llm_configs.json before entering loop
+        _rebuild_llm_client_from_llm_configs(initial=True)
         while True:
             try:
+                # Rebuild client if llm_configs.json changed
+                _rebuild_llm_client_from_llm_configs()
                 if llm_client is None:
                     await asyncio.sleep(1)
                     continue
@@ -225,7 +238,7 @@ async def pipeline() -> None:
             }
             control.write_status(hb)
 
-            # Hot-reload runtime overrides if changed
+            # Hot-reload runtime overrides if changed (timings, thresholds, horizons)
             try:
                 changed, overrides = runtime_cfg.load_if_changed()
                 if changed and overrides:
@@ -234,7 +247,7 @@ async def pipeline() -> None:
                         signal_engine=signal_engine,
                         evaluator=evaluator,
                     )
-                    _rebuild_llm_client(overrides)
+                    _apply_llm_timing(overrides)
 
                     # Handle tracked symbols change
                     try:

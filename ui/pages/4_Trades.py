@@ -7,14 +7,16 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
-from ui.lib.common import LOGBOOK_DIR, render_common_sidebar, PAGE_HEADER_TITLE
+from ui.lib.common import LOGBOOK_DIR, PAGE_HEADER_TITLE, render_status_badge
+from ui.lib.settings_state import load_sidebar_settings
 from ui.lib.logbook_utils import tail_parquet_table
 
 
 st.set_page_config(page_title="Trades", layout="wide")
 st.title(PAGE_HEADER_TITLE)
-with st.sidebar:
-    symbol, refresh_s, _ = render_common_sidebar(st)
+render_status_badge(st)
+_persisted = load_sidebar_settings()
+symbol = _persisted.get("symbol", "BTCUSDT")
 st.subheader("Trades")
 st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
 

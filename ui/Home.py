@@ -1,5 +1,4 @@
 import os
-import time
 import json
 import sys as _sys
 import os as _os
@@ -29,8 +28,7 @@ from ui.lib.control_utils import (
 st.set_page_config(page_title="Home", layout="wide")
 
 st.title(PAGE_HEADER_TITLE)
-with st.sidebar:
-    symbol, refresh, show_price_panel = render_common_sidebar(st)
+symbol, refresh, show_price_panel = render_common_sidebar(st)
 
 col1, col2 = st.columns(2)
 
@@ -111,5 +109,16 @@ else:
 st.caption(f"CONTROL_DIR: {CONTROL_DIR}")
 
 st.caption("Auto-refreshing…")
-time.sleep(refresh)
-st.rerun()
+# Use non-blocking auto-refresh to avoid keeping the script in RUNNING state
+try:
+    if hasattr(st, "autorefresh"):
+        st.autorefresh(interval=int(refresh) * 1000, key="home_autorefresh")
+    else:
+        # Fallback: lightweight JS reload after the interval
+        st.markdown(
+            f"<script>setTimeout(function(){{window.location.reload();}}, {int(refresh) * 1000});</script>",
+            unsafe_allow_html=True,
+        )
+except Exception:
+    # As a last resort, do nothing (no auto-refresh) rather than blocking the UI
+    pass

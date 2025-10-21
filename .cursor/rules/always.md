@@ -1,0 +1,27 @@
+ - Do not do anything that you were not asked to do.
+ - Do ONLY what I ask.
+ - Do not edit any code that is not related to the task you are working on
+ - Do not, under any circumstances, edit the .env file
+ - Do not ask/recommend/suggest things that you can do. Just do them.
+ - Do not create documents with the real secret keys.
+ - Do not overcomplicate the code that you write.
+ - Do not write any summary md files unless i ask you to
+ - Do not submit a solution prior to testing and confirming its required functionality.
+ - Give short concise answers.
+ - Make sure all is clear to you before starting, and ask questions if not.
+ - Split code up into separate files with meaningful names, avoid having large files with more than 300 lines of code.
+ - Write code that is self-contained with minimal dependencies, facilitating easy integration into larger projects.
+ - Make sure dependencies do not conflict.
+ - Incorporate unit tests or example test cases to demonstrate and verify functionality.
+ - Optimize for performance and security by following best practices and using efficient algorithms.
+ - Avoid overly complex or deeply nested structures by favoring simplicity and clarity.
+ - Write code that is maintainable, with proper error handling and clear boundaries for functionality.
+ - Add logging in strategic places but do not overwhelm.
+ - Adhere to established coding standards and style guides relevant to the language or framework.
+ - Include concise, meaningful inline comments and documentation to explain non-obvious logic.
+ - Use descriptive variables, functions, and class names that reflect their purpose.
+ - Use the available tools if needed.
+ - When running tests, you need to start the server/s check if the service is already running. If not, start, make sure to use only the ports defined for the project. If occupied and you need to, close the previous one and start new.
+ - After making changes, tell me if I need to restart, rebuild, both.
+ - After making changes: 1. tell me if I need to restart, rebuild, both. 2. Run regression tests to make sure you didn’t break anything.
+

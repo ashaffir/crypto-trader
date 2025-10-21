@@ -17,6 +17,10 @@ class RuntimeConfigPaths:
     def runtime_file(self) -> str:
         return os.path.join(self.base_dir, "runtime_config.json")
 
+    @property
+    def llm_configs_file(self) -> str:
+        return os.path.join(self.base_dir, "llm_configs.json")
+
 
 def _safe_read_json(path: str) -> Optional[Dict[str, Any]]:
     try:
@@ -69,6 +73,7 @@ class RuntimeConfigManager:
     def __init__(self, base_dir: Optional[str] = None) -> None:
         self.paths = RuntimeConfigPaths(base_dir or DEFAULT_CONTROL_DIR)
         self._last_loaded: Optional[Dict[str, Any]] = None
+        self._last_llm_mtime: Optional[float] = None
 
     def read(self) -> Optional[Dict[str, Any]]:
         return _safe_read_json(self.paths.runtime_file)
@@ -87,6 +92,42 @@ class RuntimeConfigManager:
             self._last_loaded = cfg
             return (True, cfg)
         return (False, cfg)
+
+    # ---------- LLM configs: separate file llm_configs.json ----------
+    def _llm_file_mtime(self) -> Optional[float]:
+        try:
+            return os.path.getmtime(self.paths.llm_configs_file)
+        except Exception:
+            return None
+
+    def read_llm_configs(self) -> Optional[Dict[str, Any]]:
+        return _safe_read_json(self.paths.llm_configs_file)
+
+    def load_llm_configs_if_changed(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        mtime = self._llm_file_mtime()
+        if mtime is None:
+            if self._last_llm_mtime is None:
+                return (False, None)
+            return (False, None)
+        if self._last_llm_mtime is None or mtime != self._last_llm_mtime:
+            self._last_llm_mtime = mtime
+            return (True, self.read_llm_configs())
+        return (False, self.read_llm_configs())
+
+    @staticmethod
+    def get_active_llm_config_from(
+        configs_doc: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            configs = (configs_doc or {}).get("configs", [])
+            if not isinstance(configs, list):
+                return None
+            for cfg in configs:
+                if isinstance(cfg, dict) and cfg.get("is_active"):
+                    return cfg
+            return configs[0] if configs else None
+        except Exception:
+            return None
 
     # ---------- Application helpers ----------
     @staticmethod
