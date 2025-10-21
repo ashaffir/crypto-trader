@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Optional
 
 from .common import CONTROL_DIR
 
@@ -11,7 +12,7 @@ _DEFAULTS: dict[str, object] = {
 }
 
 
-def _runtime_file(base_dir: str | None = None) -> str:
+def _runtime_file(base_dir: Optional[str] = None) -> str:
     b = base_dir or CONTROL_DIR
     return os.path.join(b, "runtime_config.json")
 
@@ -46,7 +47,7 @@ def _safe_write_json(path: str, data: dict) -> bool:
         return False
 
 
-def load_backtesting_settings(base_dir: str | None = None) -> dict:
+def load_backtesting_settings(base_dir: Optional[str] = None) -> dict:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     raw = cfg.get("backtesting") if isinstance(cfg, dict) else None
@@ -58,7 +59,7 @@ def load_backtesting_settings(base_dir: str | None = None) -> dict:
     return out
 
 
-def save_backtesting_settings(settings: dict, base_dir: str | None = None) -> bool:
+def save_backtesting_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     keep: dict[str, object] = {}
@@ -74,7 +75,7 @@ def save_backtesting_settings(settings: dict, base_dir: str | None = None) -> bo
 # ---- Tracked symbols and LLM settings ----
 
 
-def load_tracked_symbols(base_dir: str | None = None) -> list[str]:
+def load_tracked_symbols(base_dir: Optional[str] = None) -> list[str]:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     raw = cfg.get("symbols") if isinstance(cfg, dict) else None
@@ -84,7 +85,7 @@ def load_tracked_symbols(base_dir: str | None = None) -> list[str]:
     return ["BTCUSDT"]
 
 
-def save_tracked_symbols(symbols: list[str], base_dir: str | None = None) -> bool:
+def save_tracked_symbols(symbols: list[str], base_dir: Optional[str] = None) -> bool:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     merged = dict(cfg or {})
@@ -92,7 +93,7 @@ def save_tracked_symbols(symbols: list[str], base_dir: str | None = None) -> boo
     return _safe_write_json(path, merged)
 
 
-def load_llm_settings(base_dir: str | None = None) -> dict:
+def load_llm_settings(base_dir: Optional[str] = None) -> dict:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     raw = cfg.get("llm") if isinstance(cfg, dict) else None
@@ -123,7 +124,7 @@ def load_llm_settings(base_dir: str | None = None) -> dict:
     return out
 
 
-def save_llm_settings(settings: dict, base_dir: str | None = None) -> bool:
+def save_llm_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
     merged = dict(cfg or {})
@@ -143,12 +144,12 @@ def save_llm_settings(settings: dict, base_dir: str | None = None) -> bool:
     return _safe_write_json(path, merged)
 
 
-def _llm_configs_file(base_dir: str | None = None) -> str:
+def _llm_configs_file(base_dir: Optional[str] = None) -> str:
     b = base_dir or CONTROL_DIR
     return os.path.join(b, "llm_configs.json")
 
 
-def load_llm_configs(base_dir: str | None = None) -> list[dict]:
+def load_llm_configs(base_dir: Optional[str] = None) -> list[dict]:
     """Load all LLM configurations from llm_configs.json"""
     path = _llm_configs_file(base_dir)
     data = _safe_read_json(path)
@@ -158,14 +159,14 @@ def load_llm_configs(base_dir: str | None = None) -> list[dict]:
     return []
 
 
-def save_llm_configs(configs: list[dict], base_dir: str | None = None) -> bool:
+def save_llm_configs(configs: list[dict], base_dir: Optional[str] = None) -> bool:
     """Save all LLM configurations to llm_configs.json"""
     path = _llm_configs_file(base_dir)
     data = {"configs": configs}
     return _safe_write_json(path, data)
 
 
-def get_active_llm_config(base_dir: str | None = None) -> dict | None:
+def get_active_llm_config(base_dir: Optional[str] = None) -> Optional[dict]:
     """Get the active LLM configuration"""
     configs = load_llm_configs(base_dir)
     for cfg in configs:
@@ -174,7 +175,7 @@ def get_active_llm_config(base_dir: str | None = None) -> dict | None:
     return configs[0] if configs else None
 
 
-def set_active_llm(name: str, base_dir: str | None = None) -> bool:
+def set_active_llm(name: str, base_dir: Optional[str] = None) -> bool:
     """Set the specified LLM as active"""
     configs = load_llm_configs(base_dir)
     found = False
@@ -189,7 +190,7 @@ def set_active_llm(name: str, base_dir: str | None = None) -> bool:
     return False
 
 
-def delete_llm_config(name: str, base_dir: str | None = None) -> bool:
+def delete_llm_config(name: str, base_dir: Optional[str] = None) -> bool:
     """Delete an LLM configuration by name"""
     configs = load_llm_configs(base_dir)
     new_configs = [cfg for cfg in configs if cfg.get("name") != name]
@@ -198,7 +199,7 @@ def delete_llm_config(name: str, base_dir: str | None = None) -> bool:
     return False
 
 
-def upsert_llm_config(config: dict, base_dir: str | None = None) -> bool:
+def upsert_llm_config(config: dict, base_dir: Optional[str] = None) -> bool:
     """Create or update an LLM configuration"""
     configs = load_llm_configs(base_dir)
     name = config.get("name")
@@ -219,14 +220,14 @@ def upsert_llm_config(config: dict, base_dir: str | None = None) -> bool:
     return save_llm_configs(configs, base_dir)
 
 
-def load_window_seconds(base_dir: str | None = None) -> int:
+def load_window_seconds(base_dir: Optional[str] = None) -> int:
     """Load the window size in seconds for LLM data analysis"""
     settings = load_llm_settings(base_dir)
     window = settings.get("window_seconds", 60)
     return int(window) if isinstance(window, (int, float)) else 60
 
 
-def save_window_seconds(seconds: int, base_dir: str | None = None) -> bool:
+def save_window_seconds(seconds: int, base_dir: Optional[str] = None) -> bool:
     """Save the window size in seconds for LLM data analysis"""
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
@@ -240,7 +241,7 @@ def save_window_seconds(seconds: int, base_dir: str | None = None) -> bool:
     return _safe_write_json(path, merged)
 
 
-def load_sidebar_settings(base_dir: str | None = None) -> dict:
+def load_sidebar_settings(base_dir: Optional[str] = None) -> dict:
     """Load sidebar settings; default symbol is first tracked; refresh=2."""
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)
@@ -262,7 +263,7 @@ def load_sidebar_settings(base_dir: str | None = None) -> dict:
     return out
 
 
-def save_sidebar_settings(settings: dict, base_dir: str | None = None) -> bool:
+def save_sidebar_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
     """Persist sidebar settings (symbol, refresh_seconds)."""
     path = _runtime_file(base_dir)
     cfg = _safe_read_json(path)

@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Optional
 
 from .common import CONTROL_DIR
 
@@ -12,7 +13,7 @@ _DEFAULTS: dict[str, object] = {
 }
 
 
-def _runtime_file(base_dir: str | None = None) -> str:
+def _runtime_file(base_dir: Optional[str] = None) -> str:
     b = base_dir or CONTROL_DIR
     return os.path.join(b, "runtime_config.json")
 
@@ -47,7 +48,7 @@ def _safe_write_json(path: str, data: dict) -> bool:
         return False
 
 
-def load_retention_settings(base_dir: str | None = None) -> dict:
+def load_retention_settings(base_dir: Optional[str] = None) -> dict:
     """Return persisted retention settings merged with defaults.
 
     Data lives under key "retention" inside runtime_config.json. Unknown keys are
@@ -64,7 +65,7 @@ def load_retention_settings(base_dir: str | None = None) -> dict:
     return out
 
 
-def save_retention_settings(settings: dict, base_dir: str | None = None) -> bool:
+def save_retention_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
     """Persist provided retention settings under the "retention" key.
 
     Only recognized keys are stored; others are ignored. Existing runtime

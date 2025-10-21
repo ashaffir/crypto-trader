@@ -12,7 +12,7 @@ from ui.lib.common import (
     PAGE_HEADER_TITLE,
     render_status_badge,
 )
-from ui.lib.settings_state import load_sidebar_settings
+from ui.lib.settings_state import load_sidebar_settings, load_tracked_symbols
 from ui.lib.logbook_utils import tail_parquet_table, list_symbols_with_data
 
 
@@ -23,7 +23,22 @@ render_status_badge(st)
 # Build page-scoped symbol selector based on available data
 _persisted = load_sidebar_settings()
 _default_symbol = _persisted.get("symbol", "BTCUSDT")
-_available = list_symbols_with_data("trade_recommendation")
+
+# Build options: start with tracked symbols (preserve order),
+# then append any symbols that have data but aren't tracked yet
+try:
+    _tracked = load_tracked_symbols()
+except Exception:
+    _tracked = []
+try:
+    _with_data = list_symbols_with_data("trade_recommendation")
+except Exception:
+    _with_data = []
+
+_available = list(_tracked) if _tracked else []
+for s in _with_data:
+    if s not in _available:
+        _available.append(s)
 
 st.subheader("Trades")
 if not _available:

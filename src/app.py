@@ -123,6 +123,28 @@ async def pipeline() -> None:
         except Exception as e:
             logger.warning(f"Failed to load llm_configs.json: {e}")
 
+    def _apply_llm_debug_setting() -> None:
+        """Enable/disable saving last LLM req/resp based on runtime overrides."""
+        nonlocal llm_client
+        if llm_client is None:
+            return
+        try:
+            overrides = runtime_cfg.read() or {}
+            llm_section = overrides.get("llm") if isinstance(overrides, dict) else None
+            if isinstance(llm_section, dict) and llm_section.get("debug_save_request"):
+                import os
+
+                base_dir = runtime_cfg.paths.base_dir
+                os.makedirs(base_dir, exist_ok=True)
+                llm_client.set_debug_save_path(
+                    os.path.join(base_dir, "llm_last_request.json")
+                )
+            else:
+                llm_client.set_debug_save_path(None)
+        except Exception:
+            # Never crash the loop on debug setting updates
+            pass
+
     async def llm_loop() -> None:
         nonlocal llm_client, llm_window_s, llm_refresh_s
         # Initialize from llm_configs.json before entering loop
@@ -134,43 +156,55 @@ async def pipeline() -> None:
                 if llm_client is None:
                     await asyncio.sleep(1)
                     continue
-                # For each symbol, build a summary and query LLM
-                for sym in cfg.symbols:
+                # Apply debug save toggle live from runtime_config.json
+                _apply_llm_debug_setting()
+                # Aggregate per-symbol summaries and query LLM once per refresh
+                summaries = []
+                for sym in current_symbols:
                     summary = features.summarize_window(sym, window_s=llm_window_s)
-                    if not summary or summary.get("count", 0) == 0:
-                        continue
+                    if summary and summary.get("count", 0) > 0:
+                        summaries.append(summary)
+                if summaries:
                     variables = {
-                        "symbol": sym,
+                        "symbols": list(current_symbols),
                         "window_seconds": llm_window_s,
-                        "summary": summary,
+                        "DATA_WINDOW": summaries,
                     }
                     recs = await llm_client.generate(variables)
-                    if not recs:
-                        continue
-                    for rec in recs:
-                        try:
-                            asset = str(rec.get("asset") or sym).upper()
-                            direction_raw = str(rec.get("direction")).lower()
-                            direction = (
-                                "buy" if direction_raw in ("buy", "long") else "sell"
-                            )
-                            leverage = int(rec.get("leverage") or 1)
-                            now_ms = int(__import__("time").time() * 1000)
-                            logbook.append_trade_recommendation(
-                                [
-                                    {
-                                        "ts_ms": now_ms,
-                                        "symbol": asset,
-                                        "asset": asset,
-                                        "direction": direction,
-                                        "leverage": leverage,
-                                        "source": "llm",
-                                    }
-                                ]
-                            )
-                        except Exception:
-                            # Ignore malformed recs
-                            pass
+                    if recs:
+                        for rec in recs:
+                            try:
+                                asset = str(rec.get("asset") or "").upper()
+                                # Fallback to first summary symbol if asset missing
+                                if not asset and summaries:
+                                    asset = str(
+                                        summaries[0].get("symbol") or ""
+                                    ).upper()
+                                if not asset:
+                                    continue
+                                direction_raw = str(rec.get("direction")).lower()
+                                direction = (
+                                    "buy"
+                                    if direction_raw in ("buy", "long")
+                                    else "sell"
+                                )
+                                leverage = int(rec.get("leverage") or 1)
+                                now_ms = int(__import__("time").time() * 1000)
+                                logbook.append_trade_recommendation(
+                                    [
+                                        {
+                                            "ts_ms": now_ms,
+                                            "symbol": asset,
+                                            "asset": asset,
+                                            "direction": direction,
+                                            "leverage": leverage,
+                                            "source": "llm",
+                                        }
+                                    ]
+                                )
+                            except Exception:
+                                # Ignore malformed recs
+                                pass
             except Exception as e:
                 logger.warning(f"LLM loop error: {e}")
             finally:

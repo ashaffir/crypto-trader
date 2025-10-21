@@ -147,3 +147,61 @@ def test_save_and_load_multiple_llm_configs(tmp_path, monkeypatch):
     assert isinstance(lcfgs, dict)
     assert set(lcfgs.keys()) == {"default", "alt"}
     assert lcfgs["alt"]["base_url"] == "http://two"
+
+
+def test_multi_asset_data_window_injection(monkeypatch):
+    # Ensure the user template with {{DATA_WINDOW}} receives an array of summaries
+    from src.utils.llm_client import LLMClient, LLMConfig
+
+    captured_payload = {}
+
+    # Configure client with OpenAI-compatible endpoint
+    cfg = LLMConfig(base_url="https://api.deepseek.com", model="deepseek-chat")
+    client = LLMClient(cfg)
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            # Return empty array to keep it simple
+            return {"choices": [{"message": {"content": "[]"}}]}
+
+    class _Client:
+        async def post(self, url, headers=None, json=None):  # type: ignore
+            nonlocal captured_payload
+            captured_payload = json or {}
+            return _Resp()
+
+        async def aclose(self):
+            return None
+
+    client._client = _Client()  # type: ignore
+
+    summaries = [
+        {"symbol": "BTCUSDT", "count": 2, "series": {"mid": [1, 2]}},
+        {"symbol": "ETHUSDT", "count": 3, "series": {"mid": [4, 5, 6]}},
+    ]
+
+    # Use variables exactly as app passes them
+    recs = __import__("asyncio").run(
+        client.generate(
+            {
+                "symbols": ["BTCUSDT", "ETHUSDT"],
+                "window_seconds": 30,
+                "DATA_WINDOW": summaries,
+            }
+        )
+    )
+
+    # Should parse to empty list
+    assert isinstance(recs, list) and len(recs) == 0
+
+    # Verify DATA_WINDOW was injected into the messages content
+    msgs = (captured_payload or {}).get("messages", [])
+    assert msgs and msgs[-1].get("role") == "user"
+    content = msgs[-1].get("content") or ""
+    # Both symbols should appear in the final rendered content
+    assert "BTCUSDT" in content and "ETHUSDT" in content

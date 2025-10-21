@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List, Tuple
 
@@ -27,6 +28,8 @@ class LLMClient:
         logger.debug(f"LLMClient initialized with timeout={timeout}s")
         # Optional: path to write last request for debugging (set via setter)
         self._debug_save_path: Optional[str] = None
+        # Derived response path when debug save is enabled
+        self._debug_response_path: Optional[str] = None
 
     async def aclose(self) -> None:
         try:
@@ -160,6 +163,13 @@ class LLMClient:
                 self._last_debug["status_code"] = getattr(resp, "status_code", None)
                 # Capture full response for debugging
                 self._last_debug["response_body"] = data
+            except Exception:
+                pass
+            # Best-effort: persist raw response to file if debug is enabled
+            try:
+                if self._debug_response_path:
+                    with open(self._debug_response_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f)
             except Exception:
                 pass
         except httpx.TimeoutException as e:
@@ -320,6 +330,18 @@ class LLMClient:
 
     def set_debug_save_path(self, path: Optional[str]) -> None:
         self._debug_save_path = path
+        try:
+            if path:
+                base_dir = os.path.dirname(path)
+                # Always co-locate response file next to request file
+                self._debug_response_path = os.path.join(
+                    base_dir, "llm_last_response.json"
+                )
+            else:
+                self._debug_response_path = None
+        except Exception:
+            # Fall back to disabling response save if any issue computing path
+            self._debug_response_path = None
 
 
 __all__ = ["LLMClient", "LLMConfig"]
