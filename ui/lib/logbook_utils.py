@@ -16,16 +16,33 @@ def tail_parquet_table(table: str, symbol: str, tail_files: int = 20) -> pd.Data
     if not files:
         return pd.DataFrame()
     subset = files[-tail_files:]
+    # First, try to read as a single logical table (fast path)
     try:
         tbl = pq.read_table(subset)
-        return tbl.to_pandas()
+        return _table_cast_dictionary_to_string(tbl).to_pandas()
     except Exception:
+        # Fallback: read file-by-file, and if a file has mixed row-group schemas,
+        # read row groups individually. Cast any dictionary columns to strings to
+        # avoid merge/type conflicts across parts.
         frames: list[pd.DataFrame] = []
         for f in subset:
             try:
-                frames.append(pq.read_table(f).to_pandas())
+                t = pq.read_table(f)
+                frames.append(_table_cast_dictionary_to_string(t).to_pandas())
+                continue
+            except Exception:
+                pass
+            # Per-row-group fallback
+            try:
+                pf = pq.ParquetFile(f)
             except Exception:
                 continue
+            for i in range(getattr(pf, "num_row_groups", 0)):
+                try:
+                    rg = pf.read_row_group(i)
+                    frames.append(_table_cast_dictionary_to_string(rg).to_pandas())
+                except Exception:
+                    continue
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True, sort=False)

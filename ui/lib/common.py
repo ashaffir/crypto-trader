@@ -6,8 +6,30 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
-LOGBOOK_DIR = _os.getenv("LOGBOOK_DIR", "data/logbook")
-CONTROL_DIR = _os.getenv("CONTROL_DIR", _os.path.join("data", "control"))
+
+def _resolve_path(env_var_name: str, default_rel: str) -> str:
+    """Resolve a data path that works in both Docker and local runs.
+
+    Preference order:
+      1) Environment variable if set and exists
+      2) Project-root absolute default (ui/..../default_rel)
+      3) Plain relative default string
+    """
+    env_val = _os.getenv(env_var_name)
+    if env_val and _os.path.isdir(env_val):
+        return env_val
+
+    # Try absolute path anchored at project root (parent of `ui/`)
+    abs_default = _os.path.abspath(_os.path.join(_ROOT, default_rel))
+    if _os.path.isdir(abs_default):
+        return abs_default
+
+    # Fallback to plain relative for last resort
+    return default_rel
+
+
+LOGBOOK_DIR = _resolve_path("LOGBOOK_DIR", _os.path.join("data", "logbook"))
+CONTROL_DIR = _resolve_path("CONTROL_DIR", _os.path.join("data", "control"))
 
 __all__ = ["LOGBOOK_DIR", "CONTROL_DIR"]
 PAGE_HEADER_TITLE = "Crypto Bot"
