@@ -143,23 +143,8 @@ class RuntimeConfigManager:
         """
         if not overrides:
             return
-        # Signal engine thresholds/rules/horizons
-        if signal_engine is not None:
-            if isinstance(overrides.get("signal_thresholds"), dict):
-                signal_engine.thr = _merge(signal_engine.thr, overrides["signal_thresholds"])  # type: ignore[attr-defined]
-            if isinstance(overrides.get("rules"), dict):
-                signal_engine.rules = _merge(signal_engine.rules, overrides["rules"])  # type: ignore[attr-defined]
-            if isinstance(overrides.get("horizons"), dict):
-                signal_engine.hz = _merge(signal_engine.hz, overrides["horizons"])  # type: ignore[attr-defined]
-
-        # Evaluator horizon (scalp)
-        if evaluator is not None and isinstance(overrides.get("horizons"), dict):
-            scalp = overrides["horizons"].get("scalp")
-            if isinstance(scalp, int) and scalp > 0:
-                try:
-                    evaluator.horizon_ms = int(scalp) * 1000
-                except Exception:
-                    pass
+        # No-op: signal engine and evaluator removed
+        return
 
 
 __all__ = ["RuntimeConfigManager"]

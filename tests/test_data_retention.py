@@ -42,7 +42,9 @@ def test_prune_to_size_cap():
         base_date = datetime(2025, 10, 1, tzinfo=timezone.utc)
         for i in range(3):
             d = (base_date + timedelta(days=i)).strftime("%Y-%m-%d")
-            _write_partition(tmp, "signal_emitted", "BTCUSDT", d, rows=(i + 1) * 1000)
+            _write_partition(
+                tmp, "trade_recommendation", "BTCUSDT", d, rows=(i + 1) * 1000
+            )
         # Compute total actual size and set a cap that forces pruning
         total = 0
         for root, _dirs, files in os.walk(tmp):

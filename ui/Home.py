@@ -30,60 +30,7 @@ st.set_page_config(page_title="Home", layout="wide")
 st.title(PAGE_HEADER_TITLE)
 symbol, refresh, show_price_panel = render_common_sidebar(st)
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Recent Signals")
-    sig_df = tail_parquet_table("signal_emitted", symbol)
-    if not sig_df.empty:
-        # Add human-readable timestamp string (no timezone suffix)
-        try:
-            sig_df["ts"] = (
-                pd.to_datetime(sig_df["ts_ms"], unit="ms", utc=True)
-                .dt.tz_localize(None)
-                .dt.strftime("%Y-%m-%d %H:%M:%S.%f")
-                .str[:-3]
-            )
-        except Exception:
-            sig_df["ts"] = ""
-        sig_df = sig_df.sort_values("ts_ms", ascending=False).head(50)
-        st.dataframe(
-            sig_df[["ts", "symbol", "side", "expected_bps", "confidence", "rule_id"]]
-        )
-    else:
-        st.info("No signals yet")
-
-with col2:
-    st.subheader("Recent Performance (outcomes)")
-    out_df = tail_parquet_table("signal_outcome", symbol)
-    if not out_df.empty:
-        # Add human-readable resolved timestamp string (no timezone suffix)
-        try:
-            out_df["resolved_ts"] = (
-                pd.to_datetime(out_df["resolved_ts_ms"], unit="ms", utc=True)
-                .dt.tz_localize(None)
-                .dt.strftime("%Y-%m-%d %H:%M:%S.%f")
-                .str[:-3]
-            )
-        except Exception:
-            out_df["resolved_ts"] = ""
-        out_df = out_df.sort_values("resolved_ts_ms", ascending=False).head(100)
-        st.metric("Hit-rate (last 100)", f"{(out_df['hit'].mean()*100):.1f}%")
-        st.metric("Mean return (bps)", f"{out_df['ret_bps'].mean():.2f}")
-        st.dataframe(
-            out_df[
-                [
-                    "signal_id",
-                    "resolved_ts",
-                    "ret_bps",
-                    "hit",
-                    "max_adverse_bps",
-                    "max_favorable_bps",
-                ]
-            ]
-        )
-    else:
-        st.info("No outcomes yet")
+st.write("")
 
 # Live price/heartbeat panel
 st.divider()

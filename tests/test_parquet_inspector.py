@@ -23,8 +23,8 @@ def _write_partition(base: str, table: str, symbol: str, date: str) -> None:
 def test_listing_helpers_work():
     with tempfile.TemporaryDirectory() as tmp:
         _write_partition(tmp, "market_snapshot", "BTCUSDT", "2025-10-18")
-        _write_partition(tmp, "signal_emitted", "BTCUSDT", "2025-10-18")
-        assert list_tables(tmp) == ["market_snapshot", "signal_emitted"]
+        _write_partition(tmp, "trade_recommendation", "BTCUSDT", "2025-10-18")
+        assert list_tables(tmp) == ["market_snapshot", "trade_recommendation"]
         assert list_symbols(tmp, "market_snapshot") == ["BTCUSDT"]
         assert list_dates(tmp, "market_snapshot", "BTCUSDT") == ["2025-10-18"]
         files = glob_parquet_files(tmp, "market_snapshot", "BTCUSDT", None)

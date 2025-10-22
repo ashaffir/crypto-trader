@@ -8,14 +8,6 @@ features:
   vol_1s: 1
   delta_1s: 1
   ma: [7, 15, 30]
-signal_thresholds:
-  imbalance: 0.6
-  max_spread_bps: 1.5
-  # mean-reversion defaults
-  mr_min_revert_bps: 2.0
-  mr_expected_bps: 6.0
-  mr_conf_norm_bps: 5.0
-  mr_max_imbalance: 1.0
 horizons:
   scalp: 30
   ttl_s: 10
@@ -24,6 +16,3 @@ storage:
 ui:
   auto_refresh_seconds: 2
   show_debug: false
-rules:
-  momentum_enabled: true
-  mean_reversion_enabled: true

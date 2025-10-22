@@ -117,7 +117,7 @@ cmd_debug_data() {
     return
   fi
   
-  for table in market_snapshot signal_emitted signal_outcome trade_recommendation; do
+  for table in market_snapshot trade_recommendation; do
     local path="$logbook/$table"
     if [[ -d "$path" ]]; then
       local symbols=$(find "$path" -type d -name "symbol=*" 2>/dev/null | sed 's/.*symbol=//' | sort -u | tr '\n' ' ')

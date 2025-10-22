@@ -19,17 +19,6 @@ class FeatureWindows:
 
 
 @dataclass
-class SignalThresholds:
-    imbalance: float = 0.6
-    max_spread_bps: float = 1.5
-    # Mean-reversion parameters
-    mr_min_revert_bps: float = 2.0
-    mr_expected_bps: float = 6.0
-    mr_conf_norm_bps: float = 5.0
-    mr_max_imbalance: float = 1.0
-
-
-@dataclass
 class Horizons:
     scalp: int = 30
     ttl_s: int = 10
@@ -43,12 +32,6 @@ class Streams:
 
 
 @dataclass
-class Rules:
-    momentum_enabled: bool = True
-    mean_reversion_enabled: bool = True
-
-
-@dataclass
 class UIConfig:
     auto_refresh_seconds: int = 2
     show_debug: bool = False
@@ -59,13 +42,11 @@ class AppConfig:
     symbols: List[str] = field(default_factory=lambda: ["BTCUSDT"])
     streams: Streams = field(default_factory=Streams)
     features: FeatureWindows = field(default_factory=FeatureWindows)
-    signal_thresholds: SignalThresholds = field(default_factory=SignalThresholds)
     horizons: Horizons = field(default_factory=Horizons)
     storage: Dict[str, Any] = field(
         default_factory=lambda: {"logbook_dir": "data/logbook"}
     )
     ui: UIConfig = field(default_factory=UIConfig)
-    rules: Rules = field(default_factory=Rules)
 
 
 def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,11 +71,9 @@ def load_app_config(config_path: str | None = None) -> AppConfig:
         symbols=merged.get("symbols", ["BTCUSDT"]),
         streams=Streams(**merged.get("streams", {})),
         features=FeatureWindows(**merged.get("features", {})),
-        signal_thresholds=SignalThresholds(**merged.get("signal_thresholds", {})),
         horizons=Horizons(**merged.get("horizons", {})),
         storage=merged.get("storage", {"logbook_dir": "data/logbook"}),
         ui=UIConfig(**merged.get("ui", {})),
-        rules=Rules(**merged.get("rules", {})),
     )
 
 

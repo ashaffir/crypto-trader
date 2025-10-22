@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import uuid
 from typing import Dict
 
 from loguru import logger
@@ -10,9 +9,7 @@ from loguru import logger
 from src.config import load_app_config
 from src.collector import SpotCollector
 from src.features import FeatureEngine
-from src.signals import SignalEngine
 from src.logger import ParquetLogbook
-from src.evaluator import Evaluator
 from src.control import Control
 from src.runtime_config import RuntimeConfigManager
 from src.utils.llm_client import LLMClient, LLMConfig
@@ -35,14 +32,7 @@ async def pipeline() -> None:
         delta_window_s=cfg.features.delta_1s,
         ma_windows=cfg.features.ma,
     )
-    signal_engine = SignalEngine(
-        thresholds=vars(cfg.signal_thresholds),
-        horizons=vars(cfg.horizons),
-        rules=vars(cfg.rules),
-    )
     logbook = ParquetLogbook(out_dir)
-
-    evaluator = Evaluator(logbook_dir=out_dir, horizon_s=cfg.horizons.scalp)
     control = Control()
     runtime_cfg = RuntimeConfigManager()
 
@@ -230,7 +220,6 @@ async def pipeline() -> None:
 
     async def consumer() -> None:
         batch_snapshots: list[Dict] = []
-        batch_signals: list[Dict] = []
         last_flush_ts_ms: int | None = None
         while True:
             msg = await queue.get()
@@ -241,16 +230,6 @@ async def pipeline() -> None:
 
             # Append to market_snapshot batch
             batch_snapshots.append(snap)
-
-            sig = signal_engine.on_features(snap)
-            if sig:
-                # Enrich and queue
-                sig_row = {
-                    **sig,
-                    "ts_ms": snap.get("ts_ms"),
-                    "signal_id": uuid.uuid4().hex,
-                }
-                batch_signals.append(sig_row)
 
             # Flush periodically based on ts or batch size
             ts_ms = snap.get("ts_ms") or last_flush_ts_ms
@@ -273,16 +252,6 @@ async def pipeline() -> None:
                         for _sym, rows in snaps_by_sym.items():
                             logbook.append_market_snapshot(rows)
                         batch_snapshots.clear()
-                    if batch_signals:
-                        sigs_by_sym: Dict[str, list[Dict]] = {}
-                        for r in batch_signals:
-                            s = str(r.get("symbol") or "").upper()
-                            if not s:
-                                continue
-                            sigs_by_sym.setdefault(s, []).append(r)
-                        for _sym, rows in sigs_by_sym.items():
-                            logbook.append_signal_emitted(rows)
-                        batch_signals.clear()
                 except Exception as e:
                     logger.exception(f"Logbook write failed: {e}")
                 finally:
@@ -290,14 +259,10 @@ async def pipeline() -> None:
 
             queue.task_done()
 
-    async def evaluator_loop() -> None:
-        await evaluator.run_periodic(interval_seconds=5)
-
     # Collector task is managed separately to allow restart when symbols change
     collector_task = asyncio.create_task(collector.run(), name="collector")
     tasks = [
         asyncio.create_task(consumer(), name="consumer"),
-        asyncio.create_task(evaluator_loop(), name="evaluator"),
         asyncio.create_task(llm_loop(), name="llm"),
     ]
 
@@ -315,11 +280,6 @@ async def pipeline() -> None:
             try:
                 changed, overrides = runtime_cfg.load_if_changed()
                 if changed and overrides:
-                    RuntimeConfigManager.apply_to_engines(
-                        overrides,
-                        signal_engine=signal_engine,
-                        evaluator=evaluator,
-                    )
                     _apply_llm_timing(overrides)
 
                     # Handle tracked symbols change

@@ -59,26 +59,7 @@ class ParquetLogbook:
             "market_snapshot", rows, PartitionInfo(symbol=symbol, date=date_str)
         )
 
-    def append_signal_emitted(self, rows: List[Dict[str, Any]]) -> None:
-        if not rows:
-            return
-        symbol = rows[0]["symbol"]
-        ts_ms = rows[0].get("ts_ms")
-        date_str = self._today_utc_str(ts_ms)
-        self._write_rows(
-            "signal_emitted", rows, PartitionInfo(symbol=symbol, date=date_str)
-        )
-
-    def append_signal_outcome(self, rows: List[Dict[str, Any]]) -> None:
-        if not rows:
-            return
-        # Outcome rows must include symbol for partitioning consistency
-        symbol = rows[0]["symbol"]
-        ts_ms = rows[0].get("resolved_ts_ms") or rows[0].get("ts_ms")
-        date_str = self._today_utc_str(ts_ms)
-        self._write_rows(
-            "signal_outcome", rows, PartitionInfo(symbol=symbol, date=date_str)
-        )
+    # Removed: signal_emitted and signal_outcome writers
 
     def append_trade_recommendation(self, rows: List[Dict[str, Any]]) -> None:
         if not rows:

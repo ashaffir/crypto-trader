@@ -28,14 +28,11 @@ def test_runtime_config_write_and_load():
         rcm = RuntimeConfigManager(base)
 
         data = {
-            "rules": {"momentum_enabled": False},
-            "signal_thresholds": {"imbalance": 0.8, "max_spread_bps": 2.0},
             "horizons": {"scalp": 45, "ttl_s": 12},
         }
         assert rcm.write(data)
         changed, cfg = rcm.load_if_changed()
         assert changed is True
-        assert cfg["rules"]["momentum_enabled"] is False
         # No change on second load
         changed2, _ = rcm.load_if_changed()
         assert changed2 is False
