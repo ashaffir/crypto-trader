@@ -5,6 +5,7 @@ from loguru import logger
 
 from src.control import Control
 from src.app import pipeline
+from src.positions import PositionStore
 
 
 async def run_supervisor(poll_interval_s: float = 1.0) -> None:
@@ -49,6 +50,25 @@ async def run_supervisor(poll_interval_s: float = 1.0) -> None:
                     pass
                 finally:
                     task = None
+                # After pipeline stops, close all open positions (paper trades)
+                try:
+                    store = PositionStore()
+                    opens = store.get_open_positions()
+                    if opens:
+                        import time as _t
+
+                        now_ms = int(_t.time() * 1000)
+                        for p in opens:
+                            store.close_position(
+                                int(p["id"]),
+                                now_ms,
+                                exit_px=None,
+                                pnl=None,
+                                close_reason="Operation",
+                            )
+                        logger.info(f"Closed {len(opens)} open positions on stop")
+                except Exception as _e:
+                    logger.warning(f"Failed to close open positions on stop: {_e}")
 
         # If desired is running but task is absent (e.g., after crash), start it
         if desired == "running" and task is None:

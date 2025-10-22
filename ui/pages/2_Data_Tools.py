@@ -92,7 +92,6 @@ except Exception:
 
 
 st.set_page_config(page_title="Data Tools", layout="wide")
-st.title(PAGE_HEADER_TITLE)
 render_status_badge(st)
 st.subheader("Data Tools")
 st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")

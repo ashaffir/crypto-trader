@@ -15,7 +15,6 @@ from ui.lib.common import (
     CONTROL_DIR,
 )
 from ui.lib.settings_state import (
-    load_sidebar_settings,
     load_tracked_symbols,
     get_active_llm_config,
 )
@@ -27,13 +26,11 @@ from ui.lib.logbook_utils import (
 )
 
 
-st.set_page_config(page_title="Trades", layout="wide")
-st.title(PAGE_HEADER_TITLE)
+st.set_page_config(page_title="Recommendations", layout="wide")
 render_status_badge(st)
 
 # Build page-scoped symbol selector based on available data
-_persisted = load_sidebar_settings()
-_default_symbol = _persisted.get("symbol", "BTCUSDT")
+_default_symbol = "BTCUSDT"
 
 # Build options: start with tracked symbols (preserve order),
 # then append any symbols that have data but aren't tracked yet
@@ -51,21 +48,21 @@ for s in _with_data:
     if s not in _available:
         _available.append(s)
 
-st.subheader("Trades")
+st.subheader("Recommendations")
 if not _available:
     st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
-    st.info("No trade data found in logbook.")
+    st.info("No recommendations found in logbook.")
     st.stop()
 
 symbol_index = _available.index(_default_symbol) if _default_symbol in _available else 0
 symbol = st.selectbox(
-    "Symbol", _available, index=symbol_index, key="trades_symbol_select"
+    "Symbol", _available, index=symbol_index, key="recs_symbol_select"
 )
 st.caption(f"LOGBOOK_DIR: {LOGBOOK_DIR}")
 
 df = tail_parquet_table("trade_recommendation", symbol, tail_files=50)
 if df.empty:
-    st.info("No trade recommendations yet.")
+    st.info("No recommendations yet.")
 else:
     try:
         df = df.sort_values("ts_ms")
@@ -85,12 +82,27 @@ else:
     # Reset index for pagination calculations only (do not display as column)
     df = df.reset_index(drop=True)
 
+    # Model filter (only when column exists with real values)
+    if "llm_model" in df.columns:
+        model_values = sorted(
+            [str(m) for m in pd.Series(df["llm_model"]).dropna().unique() if str(m)]
+        )
+        if model_values:
+            selected_model = st.selectbox(
+                "LLM model",
+                options=["All"] + model_values,
+                index=0,
+                key="recs_model_filter",
+            )
+            if selected_model != "All":
+                df = df[df["llm_model"] == selected_model]
+
     # Pagination controls
     total_rows = len(df)
     left, right = st.columns([1, 3])
     with left:
         page_size = st.number_input(
-            "Rows per page", 10, 200, 50, 10, key="trades_page_size"
+            "Rows per page", 10, 200, 50, 10, key="recs_page_size"
         )
     total_pages = max(1, (total_rows + page_size - 1) // page_size)
     with right:
@@ -100,7 +112,7 @@ else:
             max_value=int(total_pages),
             value=int(total_pages),
             step=1,
-            key="trades_page_num",
+            key="recs_page_num",
         )
 
     start = (int(page_num) - 1) * int(page_size)
@@ -196,36 +208,11 @@ else:
     else:
         page_df["Confidence"] = ""
 
-    # LLM model column: from last request if available; else active config
-    def _infer_llm_model() -> str:
-        try:
-            path = _os.path.join(CONTROL_DIR, "llm_last_request.json")
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Prefer payload.model if present (OpenAI-compatible requests)
-            payload = data.get("payload") if isinstance(data, dict) else None
-            if isinstance(payload, dict):
-                model = payload.get("model")
-                if isinstance(model, str) and model:
-                    return model
-            # Fallback: direct model field if present
-            model2 = data.get("model") if isinstance(data, dict) else None
-            if isinstance(model2, str) and model2:
-                return model2
-        except Exception:
-            pass
-        try:
-            cfg = get_active_llm_config()
-            if isinstance(cfg, dict):
-                model = cfg.get("model") or cfg.get("name")
-                if isinstance(model, str):
-                    return model
-        except Exception:
-            pass
-        return ""
-
-    llm_model = _infer_llm_model()
-    page_df["LLM model"] = llm_model
+    # Per-row LLM model display
+    if "llm_model" in page_df.columns:
+        page_df["LLM model"] = page_df["llm_model"].astype(str)
+    else:
+        page_df["LLM model"] = ""
 
     # Human-friendly direction and leverage
     if "direction" in page_df.columns:

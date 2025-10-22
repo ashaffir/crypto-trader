@@ -10,6 +10,40 @@ _DEFAULTS: dict[str, object] = {
     "quality_max_files": None,  # None means "all"
     "chart_points": 200,
 }
+# ---- Trader settings ----
+
+
+def load_trader_settings(base_dir: Optional[str] = None) -> dict:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("trader") if isinstance(cfg, dict) else None
+    out: dict[str, object] = {
+        "concurrent_positions": 1,
+        "confidence_threshold": 0.8,
+        "default_position_size_usd": 0.0,
+        "default_leverage": None,
+        "tp_percent": 0.0,
+        "sl_percent": 0.0,
+        "trailing_sl_enabled": False,
+        "tp_disabled": False,
+        "auto_expire_minutes": None,
+    }
+    if isinstance(raw, dict):
+        for k in list(out.keys()):
+            if k in raw:
+                out[k] = raw[k]
+    return out
+
+
+def save_trader_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    cur = load_trader_settings(base_dir)
+    for k, v in settings.items():
+        cur[k] = v
+    merged["trader"] = cur
+    return _safe_write_json(path, merged)
 
 
 def _runtime_file(base_dir: Optional[str] = None) -> str:

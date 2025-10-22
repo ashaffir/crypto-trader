@@ -19,6 +19,8 @@ from ui.lib.settings_state import (
     set_active_llm,
     load_window_seconds,
     save_window_seconds,
+    load_trader_settings,
+    save_trader_settings,
 )
 from ui.lib.logbook_utils import read_latest_file
 from ui.lib.common import LOGBOOK_DIR
@@ -28,7 +30,6 @@ import asyncio
 
 
 st.set_page_config(page_title="Settings", layout="wide")
-st.title(PAGE_HEADER_TITLE)
 render_status_badge(st)
 st.subheader("Settings")
 st.markdown("**Tracked Symbols**")
@@ -56,8 +57,9 @@ st.button("Save Symbols", on_click=_save_symbols)
 
 st.divider()
 
-# ---- LLM Settings Section ----
-llm_col, _ = st.columns([1, 1])
+# ---- Two-column layout with vertical separator ----
+# Left: LLM/Tracked Symbols, Middle: thin separator, Right: Trader Settings
+llm_col, _sep_col, trader_col = st.columns([1, 0.03, 1])
 
 with llm_col:
     st.markdown("**LLM Settings**")
@@ -304,6 +306,122 @@ with llm_col:
             st.success("✓ Debug setting saved")
         else:
             st.error("Failed to save debug setting")
+
+
+# Render vertical separator in the thin middle column
+with _sep_col:
+    st.markdown(
+        """
+<div style="height:100%; border-left:1px solid rgba(255,255,255,0.08); margin:0 8px;">
+&nbsp;
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ---- Trader Settings ----
+with trader_col:
+    st.markdown("**Trader Settings**")
+    cur = load_trader_settings()
+
+    conc = st.number_input(
+        "Concurrent positions allowed",
+        min_value=0,
+        value=int(cur.get("concurrent_positions", 1)),
+        step=1,
+        help="Maximum number of open positions at the same time",
+    )
+
+    conf = st.number_input(
+        "Confidence Threshold",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(cur.get("confidence_threshold", 0.8)),
+        step=0.01,
+        help="Minimum confidence score required to take a trade",
+    )
+
+    size = st.number_input(
+        "Default Position Size (USD)",
+        min_value=0.0,
+        value=float(cur.get("default_position_size_usd", 0.0)),
+        step=10.0,
+        help="Nominal USD size for new positions (informational)",
+    )
+
+    lev = st.number_input(
+        "Default Leverage (optional)",
+        min_value=0,
+        max_value=125,
+        value=(
+            int(cur.get("default_leverage"))
+            if cur.get("default_leverage") not in (None, "")
+            else 0
+        ),
+        step=1,
+        help="If > 0, overrides leverage from LLM",
+    )
+
+    # Stop Loss with trailing toggle
+    sl_col1, sl_col2 = st.columns([1, 1])
+    with sl_col1:
+        sl_percent = st.number_input(
+            "Stop Loss %",
+            min_value=0.0,
+            value=float(cur.get("sl_percent", 0.0)),
+            step=0.1,
+            help="Stop loss trigger in percent (e.g., 0.5 = -0.5%)",
+        )
+    with sl_col2:
+        trailing = st.toggle(
+            "Trailing SL Enabled",
+            value=bool(cur.get("trailing_sl_enabled", False)),
+        )
+
+    # Take Profit with disable toggle
+    tp_col1, tp_col2 = st.columns([1, 1])
+    with tp_col1:
+        tp_percent = st.number_input(
+            "Take Profit %",
+            min_value=0.0,
+            value=float(cur.get("tp_percent", 0.0)),
+            step=0.1,
+            help="Take profit trigger in percent (e.g., 1.0 = +1%)",
+        )
+    with tp_col2:
+        tp_disabled = st.toggle(
+            "TP Disabled",
+            value=bool(cur.get("tp_disabled", False)),
+        )
+
+    auto_expire = st.number_input(
+        "Auto expire [Minutes] (optional)",
+        min_value=0,
+        value=(
+            int(cur.get("auto_expire_minutes"))
+            if cur.get("auto_expire_minutes") not in (None, "")
+            else 0
+        ),
+        step=1,
+        help="If > 0, positions auto-close after this many minutes",
+    )
+
+    if st.button("Save Trader Settings"):
+        payload = {
+            "concurrent_positions": int(conc),
+            "confidence_threshold": float(conf),
+            "default_position_size_usd": float(size),
+            "default_leverage": int(lev) if int(lev) > 0 else None,
+            "tp_percent": float(tp_percent),
+            "sl_percent": float(sl_percent),
+            "trailing_sl_enabled": bool(trailing),
+            "tp_disabled": bool(tp_disabled),
+            "auto_expire_minutes": int(auto_expire) if int(auto_expire) > 0 else None,
+        }
+        if save_trader_settings(payload):
+            st.success("✓ Trader settings saved")
+        else:
+            st.error("Failed to save trader settings")
 
 
 # ---- LLM Modal ----

@@ -13,6 +13,8 @@ from src.logger import ParquetLogbook
 from src.control import Control
 from src.runtime_config import RuntimeConfigManager
 from src.utils.llm_client import LLMClient, LLMConfig
+from src.positions import PositionStore
+from src.trading import TradingEngine, TraderSettings, load_trader_settings
 
 
 async def pipeline() -> None:
@@ -35,6 +37,9 @@ async def pipeline() -> None:
     logbook = ParquetLogbook(out_dir)
     control = Control()
     runtime_cfg = RuntimeConfigManager()
+    # Trading components
+    position_store = PositionStore()
+    engine = TradingEngine(position_store, TraderSettings())
 
     # ---- LLM Recommender State ----
     llm_client: LLMClient | None = None
@@ -148,6 +153,13 @@ async def pipeline() -> None:
                     continue
                 # Apply debug save toggle live from runtime_config.json
                 _apply_llm_debug_setting()
+                # Refresh trader settings from runtime overrides
+                try:
+                    _changed, _ovr = runtime_cfg.load_if_changed()
+                    settings = load_trader_settings(_ovr)
+                    engine.update_settings(settings)
+                except Exception:
+                    pass
                 # Aggregate per-symbol summaries and query LLM once per refresh
                 summaries = []
                 for sym in current_symbols:
@@ -201,6 +213,15 @@ async def pipeline() -> None:
                                             "asset": asset,
                                             "direction": direction,
                                             "leverage": leverage,
+                                            # Persist model used for this recommendation
+                                            **(
+                                                {"llm_model": str(llm_client.cfg.model)}
+                                                if getattr(llm_client, "cfg", None)
+                                                and getattr(
+                                                    llm_client.cfg, "model", None
+                                                )
+                                                else {}
+                                            ),
                                             **(
                                                 {"confidence": confidence}
                                                 if confidence is not None
@@ -209,6 +230,50 @@ async def pipeline() -> None:
                                             "source": "llm",
                                         }
                                     ]
+                                )
+
+                                # ---- Decision Flow ----
+                                # 1) Close existing if inverse or TP/SL
+                                price_info = None
+                                try:
+                                    # Prefer the specific summary for symbol if available
+                                    price_info = next(
+                                        (
+                                            s
+                                            for s in summaries
+                                            if s.get("symbol") == asset
+                                        ),
+                                        None,
+                                    )
+                                    # Map last_mid to mid for engine convenience
+                                    if (
+                                        isinstance(price_info, dict)
+                                        and "last_mid" in price_info
+                                    ):
+                                        price_info = {
+                                            "mid": price_info.get("last_mid"),
+                                            "last_px": None,
+                                        }
+                                except Exception:
+                                    price_info = None
+
+                                engine.maybe_close_on_inverse_or_tp_sl(
+                                    symbol=asset,
+                                    recommendation_direction=direction,
+                                    confidence=confidence,
+                                    ts_ms=now_ms,
+                                    price_info=price_info,
+                                )
+
+                                # 2) If no open or slot available and confidence ok -> open
+                                engine.maybe_open_from_recommendation(
+                                    symbol=asset,
+                                    direction=direction,
+                                    leverage=leverage,
+                                    confidence=confidence,
+                                    ts_ms=now_ms,
+                                    price_info=price_info,
+                                    llm_model=str(getattr(llm_client.cfg, "model", "")),
                                 )
                             except Exception:
                                 # Ignore malformed recs

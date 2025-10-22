@@ -64,8 +64,19 @@ class RuntimeConfigManager:
 
     Schema (partial, optional keys):
       {
-        "rules": {"momentum_enabled": bool, "mean_reversion_enabled": bool},
-        "signal_thresholds": {"imbalance": float, "max_spread_bps": float},
+        "llm": {...},
+        "symbols": ["BTCUSDT", ...],
+        "trader": {
+            "concurrent_positions": 1,
+            "confidence_threshold": 0.8,
+            "default_position_size_usd": 0.0,
+            "default_leverage": null,
+            "tp_percent": 0.0,
+            "sl_percent": 0.0,
+            "trailing_sl_enabled": false,
+            "tp_disabled": false,
+            "auto_expire_minutes": null
+        },
         "horizons": {"scalp": int, "ttl_s": int}
       }
     """
@@ -143,7 +154,7 @@ class RuntimeConfigManager:
         """
         if not overrides:
             return
-        # No-op: signal engine and evaluator removed
+        # Currently a placeholder for future live updates to engines
         return
 
 

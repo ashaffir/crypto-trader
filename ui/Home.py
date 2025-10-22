@@ -1,8 +1,5 @@
-import os
-import json
 import sys as _sys
 import os as _os
-import pandas as pd
 import streamlit as st
 
 # Ensure project root (parent of `ui/`) is on sys.path so `ui.*` and `src.*` are importable
@@ -10,15 +7,7 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
-from ui.lib.common import (
-    LOGBOOK_DIR,
-    CONTROL_DIR,
-    render_common_sidebar,
-    PAGE_HEADER_TITLE,
-)
-from ui.lib.logbook_utils import tail_parquet_table
 from ui.lib.control_utils import (
-    read_status,
     read_desired,
     set_desired_state,
     get_effective_status,
@@ -27,45 +16,41 @@ from ui.lib.control_utils import (
 
 st.set_page_config(page_title="Home", layout="wide")
 
-st.title(PAGE_HEADER_TITLE)
-symbol, refresh, show_price_panel = render_common_sidebar(st)
+# Minimal controls panel with only the Bot Running toggle
+st.subheader("Controls")
 
-st.write("")
+desired_current = read_desired() == "running"
+if st.session_state.get("desired_running") != desired_current:
+    st.session_state["desired_running"] = bool(desired_current)
 
-# Live price/heartbeat panel
-st.divider()
-st.subheader("Live Status")
-status = read_status()
-if status:
-    effective_status = get_effective_status()
 
-    qsz = status.get("queue_size")
-    if qsz is not None:
-        cols = st.columns(2)
-        cols[0].metric("Status", effective_status)
-        cols[1].metric("Backlog (msgs)", int(qsz))
+def _apply_desired_change() -> None:
+    val = bool(st.session_state.get("desired_running", desired_current))
+    ok = set_desired_state(val)
+    if ok:
+        st.toast("Desired state updated")
     else:
-        cols = st.columns(1)
-        cols[0].metric("Status", effective_status)
+        from ui.lib.common import CONTROL_DIR as _CTRL
 
-    # Switch reflects actual; desired mismatch banner suppressed
-else:
-    st.info("No heartbeat yet. Start the bot to see status.")
+        st.error(f"Failed to update control at {_CTRL}")
 
-# Show control dir for clarity only
-st.caption(f"CONTROL_DIR: {CONTROL_DIR}")
 
-st.caption("Auto-refreshing…")
-# Use non-blocking auto-refresh to avoid keeping the script in RUNNING state
+st.toggle(
+    "Bot Running",
+    help="Start/Stop the bot",
+    key="desired_running",
+    on_change=_apply_desired_change,
+)
+
+# Subtle hint if desired and effective diverge (e.g., waiting for heartbeat)
 try:
-    if hasattr(st, "autorefresh"):
-        st.autorefresh(interval=int(refresh) * 1000, key="home_autorefresh")
-    else:
-        # Fallback: lightweight JS reload after the interval
-        st.markdown(
-            f"<script>setTimeout(function(){{window.location.reload();}}, {int(refresh) * 1000});</script>",
-            unsafe_allow_html=True,
+    desired_label = "running" if desired_current else "stopped"
+    effective = get_effective_status()
+    if desired_label != effective:
+        st.caption(
+            f"Desired: {desired_label} • Actual: {effective} — waiting for heartbeat…"
         )
 except Exception:
-    # As a last resort, do nothing (no auto-refresh) rather than blocking the UI
     pass
+
+st.write("")
