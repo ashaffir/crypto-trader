@@ -50,26 +50,23 @@ def render_status_badge(st) -> None:
     Intended for use on non-Home pages. Reads the effective bot status and shows
     a colored pill: green when running, red when stopped.
     """
-    pass
+    from .control_utils import get_effective_status
 
+    status = get_effective_status()
+    running = str(status).lower() == "running"
 
-#     from .control_utils import get_effective_status
+    color = "#16a34a" if running else "#dc2626"  # green-600 / red-600
+    bg = "rgba(22,163,74,0.12)" if running else "rgba(220,38,38,0.12)"
+    text = "RUNNING" if running else "STOPPED"
 
-#     status = get_effective_status()
-#     running = str(status).lower() == "running"
-
-#     color = "#16a34a" if running else "#dc2626"  # green-600 / red-600
-#     bg = "rgba(22,163,74,0.12)" if running else "rgba(220,38,38,0.12)"
-#     text = "RUNNING" if running else "STOPPED"
-
-#     st.markdown(
-#         f"""
-# <div style="display:flex; justify-content:flex-end; margin-top:-0.5rem;">
-#   <span style="display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; background:{bg}; color:{color}; font-weight:600; font-size:12px; letter-spacing:0.02em;">
-#     <span style="width:8px; height:8px; border-radius:999px; background:{color}; box-shadow:0 0 0 2px rgba(0,0,0,0.05);"></span>
-#     {text}
-#   </span>
-# </div>
-#         """,
-#         unsafe_allow_html=True,
-#     )
+    st.markdown(
+        f"""
+<div style="display:flex; justify-content:flex-end; margin-top:-0.5rem;">
+  <span style="display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; background:{bg}; color:{color}; font-weight:600; font-size:12px; letter-spacing:0.02em;">
+    <span style="width:8px; height:8px; border-radius:999px; background:{color}; box-shadow:0 0 0 2px rgba(0,0,0,0.05);"></span>
+    {text}
+  </span>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )

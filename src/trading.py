@@ -152,26 +152,11 @@ class TradingEngine:
                 if opened is not None:
                     max_age_ms = int(expire_min) * 60_000
                     if int(ts_ms) - opened >= max_age_ms:
-                        pnl = None
-                        try:
-                            if (
-                                pos.get("qty") is not None
-                                and pos.get("entry_px") is not None
-                                and exit_px is not None
-                            ):
-                                qty = float(pos.get("qty"))
-                                entry = float(pos.get("entry_px"))
-                                if str(pos.get("direction")) == "long":
-                                    pnl = (float(exit_px) - entry) * qty
-                                else:
-                                    pnl = (entry - float(exit_px)) * qty
-                        except Exception:
-                            pnl = None
                         self.store.close_position(
                             pos["id"],
                             ts_ms,
                             exit_px=exit_px,
-                            pnl=pnl,
+                            pnl=None,
                             close_reason="Stale",
                         )
                         return int(pos["id"])  # closed by Stale
@@ -202,19 +187,8 @@ class TradingEngine:
                 and self.settings.tp_percent > 0
                 and change_pct >= self.settings.tp_percent
             ):
-                pnl = None
-                try:
-                    if pos.get("qty") is not None and pos.get("entry_px") is not None:
-                        qty = float(pos.get("qty"))
-                        entry = float(pos.get("entry_px"))
-                        if str(pos.get("direction")) == "long":
-                            pnl = (float(exit_px) - entry) * qty
-                        else:
-                            pnl = (entry - float(exit_px)) * qty
-                except Exception:
-                    pnl = None
                 self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=pnl, close_reason="TP"
+                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="TP"
                 )
                 return int(pos["id"])  # closed by TP
 
@@ -241,19 +215,8 @@ class TradingEngine:
                     except Exception:
                         sl_trigger = False
             if sl_trigger:
-                pnl = None
-                try:
-                    if pos.get("qty") is not None and pos.get("entry_px") is not None:
-                        qty = float(pos.get("qty"))
-                        entry = float(pos.get("entry_px"))
-                        if str(pos.get("direction")) == "long":
-                            pnl = (float(exit_px) - entry) * qty
-                        else:
-                            pnl = (entry - float(exit_px)) * qty
-                except Exception:
-                    pnl = None
                 self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=pnl, close_reason="SL"
+                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="SL"
                 )
                 return int(pos["id"])  # closed by SL
 
@@ -268,23 +231,8 @@ class TradingEngine:
                 )
             )
             if inv and confidence >= self.settings.confidence_threshold:
-                pnl = None
-                try:
-                    if (
-                        pos.get("qty") is not None
-                        and pos.get("entry_px") is not None
-                        and exit_px is not None
-                    ):
-                        qty = float(pos.get("qty"))
-                        entry = float(pos.get("entry_px"))
-                        if str(pos.get("direction")) == "long":
-                            pnl = (float(exit_px) - entry) * qty
-                        else:
-                            pnl = (entry - float(exit_px)) * qty
-                except Exception:
-                    pnl = None
                 self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=pnl, close_reason="Inverse"
+                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="Inverse"
                 )
                 return int(pos["id"])
 

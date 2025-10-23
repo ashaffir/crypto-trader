@@ -56,13 +56,24 @@ async def run_supervisor(poll_interval_s: float = 1.0) -> None:
                     opens = store.get_open_positions()
                     if opens:
                         import time as _t
+                        from ui.lib.logbook_utils import price_at_ts as _price_at_ts
 
                         now_ms = int(_t.time() * 1000)
                         for p in opens:
+                            try:
+                                sym = str(p.get("symbol")) if p.get("symbol") else None
+                            except Exception:
+                                sym = None
+                            px = None
+                            try:
+                                if sym:
+                                    px = _price_at_ts(sym, now_ms)
+                            except Exception:
+                                px = None
                             store.close_position(
                                 int(p["id"]),
                                 now_ms,
-                                exit_px=None,
+                                exit_px=px,
                                 pnl=None,
                                 close_reason="Operation",
                             )

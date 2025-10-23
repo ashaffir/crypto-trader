@@ -24,6 +24,7 @@ class Position:
     opened_ts_ms: int
     qty: Optional[float] = None
     entry_px: Optional[float] = None
+    notional: Optional[float] = None
     confidence: Optional[float] = None
     closed_ts_ms: Optional[int] = None
     exit_px: Optional[float] = None
@@ -56,6 +57,7 @@ class PositionStore:
                     opened_ts_ms INTEGER NOT NULL,
                     qty REAL,
                     entry_px REAL,
+                    notional REAL,
                     confidence REAL,
                     closed_ts_ms INTEGER,
                     exit_px REAL,
@@ -83,6 +85,8 @@ class PositionStore:
                     )
                 if "close_reason" not in cols:
                     conn.execute("ALTER TABLE positions ADD COLUMN close_reason TEXT")
+                if "notional" not in cols:
+                    conn.execute("ALTER TABLE positions ADD COLUMN notional REAL")
             except Exception:
                 pass
 
@@ -99,11 +103,18 @@ class PositionStore:
         llm_model: Optional[str] = None,
     ) -> int:
         direction_norm = "long" if direction in ("buy", "long") else "short"
+        # Compute notional exposure if data available: qty * entry_px * leverage
+        notional_value: Optional[float] = None
+        try:
+            if qty is not None and entry_px is not None and leverage is not None:
+                notional_value = float(qty) * float(entry_px) * int(leverage)
+        except Exception:
+            notional_value = None
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO positions(symbol, direction, leverage, opened_ts_ms, qty, entry_px, confidence, llm_model, best_favorable_px)
-                VALUES(?,?,?,?,?,?,?,?,?)
+                INSERT INTO positions(symbol, direction, leverage, opened_ts_ms, qty, entry_px, notional, confidence, llm_model, best_favorable_px)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     symbol.upper(),
@@ -112,6 +123,7 @@ class PositionStore:
                     int(opened_ts_ms),
                     qty,
                     entry_px,
+                    notional_value,
                     confidence,
                     llm_model,
                     entry_px,
@@ -127,10 +139,41 @@ class PositionStore:
         pnl: Optional[float] = None,
         close_reason: Optional[str] = None,
     ) -> None:
+        # If pnl is not provided, try to compute it using stored entry, qty and leverage
+        computed_pnl = pnl
+        try:
+            if computed_pnl is None and exit_px is not None:
+                with self._connect() as conn:
+                    row = conn.execute(
+                        "SELECT direction, entry_px, qty, leverage FROM positions WHERE id=?",
+                        [int(position_id)],
+                    ).fetchone()
+                    if (
+                        row is not None
+                        and row["entry_px"] is not None
+                        and row["qty"] is not None
+                    ):
+                        entry = float(row["entry_px"])  # type: ignore
+                        qty = float(row["qty"])  # type: ignore
+                        lev = int(row["leverage"]) if row["leverage"] is not None else 1  # type: ignore
+                        direction = str(row["direction"]) if row["direction"] is not None else "long"  # type: ignore
+                        if direction == "long":
+                            computed_pnl = (float(exit_px) - entry) * qty * lev
+                        else:
+                            computed_pnl = (entry - float(exit_px)) * qty * lev
+        except Exception:
+            # Best effort; keep provided pnl (possibly None)
+            pass
         with self._connect() as conn:
             conn.execute(
                 "UPDATE positions SET closed_ts_ms=?, exit_px=?, pnl=?, close_reason=? WHERE id=?",
-                [int(closed_ts_ms), exit_px, pnl, close_reason, int(position_id)],
+                [
+                    int(closed_ts_ms),
+                    exit_px,
+                    computed_pnl,
+                    close_reason,
+                    int(position_id),
+                ],
             )
 
     def get_open_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:

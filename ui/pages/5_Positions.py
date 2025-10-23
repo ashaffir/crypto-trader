@@ -48,6 +48,7 @@ def _read_all() -> pd.DataFrame:
         "leverage",
         "opened_ts_ms",
         "entry_px",
+        "notional",
         "confidence",
         "llm_model",
         "best_favorable_px",
@@ -104,18 +105,24 @@ else:
 
     def _pnl_pct(row):
         pnl = row.get("pnl")
+        notional = row.get("notional")
         qty = row.get("qty")
         ent = row.get("entry_px")
         try:
-            if (
-                pnl is None
-                or qty is None
-                or ent is None
-                or float(qty) == 0
-                or float(ent) == 0
+            if pnl is None or (
+                (notional is None or float(notional) == 0.0)
+                and (qty is None or ent is None or float(qty) == 0 or float(ent) == 0)
             ):
                 return None
-            return float(pnl) / (float(qty) * float(ent)) * 100.0
+            denom = None
+            try:
+                if notional is not None and float(notional) != 0.0:
+                    denom = float(notional)
+                else:
+                    denom = float(qty) * float(ent)
+            except Exception:
+                return None
+            return float(pnl) / denom * 100.0
         except Exception:
             return None
 
