@@ -21,6 +21,8 @@ from ui.lib.settings_state import (
     save_window_seconds,
     load_trader_settings,
     save_trader_settings,
+    load_trader_fee_settings,
+    save_trader_fee_settings,
 )
 from ui.lib.logbook_utils import read_latest_file
 from ui.lib.common import LOGBOOK_DIR
@@ -406,6 +408,37 @@ with trader_col:
         help="If > 0, positions auto-close after this many minutes",
     )
 
+    st.markdown("---")
+    st.markdown("**Fee Settings**")
+    fees = load_trader_fee_settings()
+    fee_enabled = st.toggle(
+        "Enable Binance fees in PnL",
+        value=bool(fees.get("enabled", False)),
+    )
+    fee_market = st.selectbox(
+        "Market",
+        options=["spot", "futures"],
+        index=(0 if str(fees.get("market", "spot")) == "spot" else 1),
+        help="Select fee schedule. Default is spot.",
+    )
+    fee_liquidity = st.selectbox(
+        "Liquidity",
+        options=["taker", "maker"],
+        index=(0 if str(fees.get("liquidity", "taker")) == "taker" else 1),
+        help="Assume taker (market) or maker (limit) fees",
+    )
+    fee_vip = st.number_input(
+        "VIP Tier",
+        min_value=0,
+        max_value=9,
+        value=int(fees.get("vip_tier", 0)),
+        step=1,
+    )
+    fee_bnb = st.toggle(
+        "Apply BNB discount (spot only)",
+        value=bool(fees.get("bnb_discount", False)),
+    )
+
     if st.button("Save Trader Settings"):
         payload = {
             "concurrent_positions": int(conc),
@@ -419,7 +452,20 @@ with trader_col:
             "auto_expire_minutes": int(auto_expire) if int(auto_expire) > 0 else None,
         }
         if save_trader_settings(payload):
-            st.success("✓ Trader settings saved")
+            # Save fees separately to avoid clobbering
+            fees_ok = save_trader_fee_settings(
+                {
+                    "enabled": bool(fee_enabled),
+                    "market": str(fee_market),
+                    "vip_tier": int(fee_vip),
+                    "liquidity": str(fee_liquidity),
+                    "bnb_discount": bool(fee_bnb),
+                }
+            )
+            if fees_ok:
+                st.success("✓ Trader settings saved (including fees)")
+            else:
+                st.warning("Trader core settings saved, but failed to save fees")
         else:
             st.error("Failed to save trader settings")
 

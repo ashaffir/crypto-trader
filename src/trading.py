@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from .positions import PositionStore
+from .utils.fees import estimate_trade_fees_usd
 
 
 @dataclass
@@ -19,6 +20,12 @@ class TraderSettings:
     trailing_sl_enabled: bool = False
     tp_disabled: bool = False
     auto_expire_minutes: Optional[int] = None
+    # --- Fee settings ---
+    fees_enabled: bool = False
+    fee_market: str = "spot"  # "spot" | "futures"
+    fee_vip_tier: int = 0
+    fee_liquidity: str = "taker"  # default assume market orders
+    fee_bnb_discount: bool = False  # only spot
 
 
 def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
@@ -50,6 +57,20 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
             "",
         ):
             out.auto_expire_minutes = max(0, int(tr.get("auto_expire_minutes")))
+        # Fees
+        fees = tr.get("fees") if isinstance(tr.get("fees"), dict) else {}
+        if fees:
+            out.fees_enabled = bool(fees.get("enabled", False))
+            if fees.get("market") in ("spot", "futures"):
+                out.fee_market = str(fees.get("market"))
+            if fees.get("vip_tier") not in (None, ""):
+                try:
+                    out.fee_vip_tier = int(fees.get("vip_tier"))
+                except Exception:
+                    pass
+            if str(fees.get("liquidity", "taker")).lower() in ("maker", "taker"):
+                out.fee_liquidity = str(fees.get("liquidity")).lower()
+            out.fee_bnb_discount = bool(fees.get("bnb_discount", False))
     except Exception as e:
         logger.warning(f"Invalid trader overrides; using defaults: {e}")
     return out
@@ -187,9 +208,7 @@ class TradingEngine:
                 and self.settings.tp_percent > 0
                 and change_pct >= self.settings.tp_percent
             ):
-                self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="TP"
-                )
+                self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="TP")
                 return int(pos["id"])  # closed by TP
 
             # SL (no trailing implementation stateful here; trailing requires tracking max_favorable)
@@ -215,9 +234,7 @@ class TradingEngine:
                     except Exception:
                         sl_trigger = False
             if sl_trigger:
-                self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="SL"
-                )
+                self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="SL")
                 return int(pos["id"])  # closed by SL
 
         # Inverse recommendation close (slots not relevant for close)
@@ -231,12 +248,95 @@ class TradingEngine:
                 )
             )
             if inv and confidence >= self.settings.confidence_threshold:
-                self.store.close_position(
-                    pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason="Inverse"
+                self._close_with_fees(
+                    pos,
+                    ts_ms,
+                    float(exit_px) if exit_px is not None else None,
+                    close_reason="Inverse",
                 )
                 return int(pos["id"])
 
         return None
+
+    def _close_with_fees(
+        self,
+        pos: Dict[str, Any],
+        ts_ms: int,
+        exit_px: Optional[float],
+        *,
+        close_reason: str,
+    ) -> None:
+        """Close a position computing net PnL after Binance fees when enabled.
+
+        We estimate two legs of fees (open and close) based on price*qty and configured rates.
+        Defaults keep previous behavior when fees are disabled or data missing.
+        """
+        # Default: let store compute pnl if fees disabled or insufficient data
+        if not self.settings.fees_enabled or exit_px is None:
+            self.store.close_position(
+                pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason=close_reason
+            )
+            return
+
+        try:
+            entry_px = (
+                float(pos.get("entry_px")) if pos.get("entry_px") is not None else None
+            )
+            qty = float(pos.get("qty")) if pos.get("qty") is not None else None
+            lev = int(pos.get("leverage")) if pos.get("leverage") is not None else 1
+            direction = str(pos.get("direction") or "long")
+        except Exception:
+            entry_px = None
+            qty = None
+            lev = 1
+            direction = "long"
+
+        if entry_px is None or qty is None:
+            # Cannot compute pnl; fallback
+            self.store.close_position(
+                pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason=close_reason
+            )
+            return
+
+        # Gross PnL as before
+        if direction == "long":
+            gross_pnl = (float(exit_px) - float(entry_px)) * float(qty) * int(lev)
+        else:
+            gross_pnl = (float(entry_px) - float(exit_px)) * float(qty) * int(lev)
+
+        # Estimate fees on open and close trades (price * qty each leg)
+        open_notional = float(entry_px) * float(qty)
+        close_notional = float(exit_px) * float(qty)
+        try:
+            market = self.settings.fee_market
+            vip = self.settings.fee_vip_tier
+            liq = self.settings.fee_liquidity
+            bnb = self.settings.fee_bnb_discount
+            open_fee = estimate_trade_fees_usd(
+                market=market,
+                vip_tier=vip,
+                liquidity=liq,
+                trade_quote_value_usd=open_notional,
+                bnb_discount=bnb,
+            )
+            close_fee = estimate_trade_fees_usd(
+                market=market,
+                vip_tier=vip,
+                liquidity=liq,
+                trade_quote_value_usd=close_notional,
+                bnb_discount=bnb,
+            )
+            net_pnl = gross_pnl - (open_fee + close_fee)
+        except Exception:
+            net_pnl = gross_pnl
+
+        self.store.close_position(
+            pos["id"],
+            ts_ms,
+            exit_px=exit_px,
+            pnl=float(net_pnl),
+            close_reason=close_reason,
+        )
 
 
 __all__ = [

@@ -46,6 +46,85 @@ def save_trader_settings(settings: dict, base_dir: Optional[str] = None) -> bool
     return _safe_write_json(path, merged)
 
 
+# ---- Trader fee settings ----
+
+
+def load_trader_fee_settings(base_dir: Optional[str] = None) -> dict:
+    """Load trader fee settings nested under trader.fees with sensible defaults.
+
+    Defaults:
+      enabled=False, market="spot", vip_tier=0, liquidity="taker", bnb_discount=False
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    trader = cfg.get("trader") if isinstance(cfg, dict) else None
+    fees = trader.get("fees") if isinstance(trader, dict) else None
+    out: dict[str, object] = {
+        "enabled": False,
+        "market": "spot",
+        "vip_tier": 0,
+        "liquidity": "taker",
+        "bnb_discount": False,
+    }
+    if isinstance(fees, dict):
+        if "enabled" in fees:
+            out["enabled"] = bool(fees.get("enabled", False))
+        if str(fees.get("market", "spot")).lower() in ("spot", "futures"):
+            out["market"] = str(fees.get("market")).lower()
+        try:
+            if fees.get("vip_tier") not in (None, ""):
+                out["vip_tier"] = max(0, min(9, int(fees.get("vip_tier"))))
+        except Exception:
+            pass
+        if str(fees.get("liquidity", "taker")).lower() in ("maker", "taker"):
+            out["liquidity"] = str(fees.get("liquidity")).lower()
+        if "bnb_discount" in fees:
+            out["bnb_discount"] = bool(fees.get("bnb_discount", False))
+    return out
+
+
+def save_trader_fee_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist trader fee settings under trader.fees, merging with existing.
+
+    Only known keys are applied; others are ignored.
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    trader = dict((merged.get("trader") or {}))
+    current = load_trader_fee_settings(base_dir)
+
+    keep: dict[str, object] = dict(current)
+    if isinstance(settings, dict):
+        if "enabled" in settings:
+            keep["enabled"] = bool(settings.get("enabled"))
+        if str(settings.get("market", keep.get("market", "spot"))).lower() in (
+            "spot",
+            "futures",
+        ):
+            keep["market"] = str(
+                settings.get("market", keep.get("market", "spot"))
+            ).lower()
+        try:
+            if settings.get("vip_tier") not in (None, ""):
+                keep["vip_tier"] = max(0, min(9, int(settings.get("vip_tier"))))
+        except Exception:
+            pass
+        if str(settings.get("liquidity", keep.get("liquidity", "taker"))).lower() in (
+            "maker",
+            "taker",
+        ):
+            keep["liquidity"] = str(
+                settings.get("liquidity", keep.get("liquidity", "taker"))
+            ).lower()
+        if "bnb_discount" in settings:
+            keep["bnb_discount"] = bool(settings.get("bnb_discount"))
+
+    trader["fees"] = keep
+    merged["trader"] = trader
+    return _safe_write_json(path, merged)
+
+
 def _runtime_file(base_dir: Optional[str] = None) -> str:
     b = base_dir or CONTROL_DIR
     return os.path.join(b, "runtime_config.json")
