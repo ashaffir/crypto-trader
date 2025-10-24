@@ -29,9 +29,10 @@ async def pipeline() -> None:
     current_symbols: list[str] = list(cfg.symbols)
 
     # Choose collector based on market mode
+    current_market = str(getattr(cfg, "market", "spot")).lower()
     collector = (
         FuturesCollector(current_symbols, vars(cfg.streams), queue)
-        if str(getattr(cfg, "market", "spot")).lower() == "futures"
+        if current_market == "futures"
         else SpotCollector(current_symbols, vars(cfg.streams), queue)
     )
     features = FeatureEngine(
@@ -47,7 +48,7 @@ async def pipeline() -> None:
     position_store = PositionStore()
     # Execution/broker setup (safe defaults)
     exec_settings = ExecutionSettings.from_overrides(None)
-    current_market = str(getattr(cfg, "market", "spot")).lower()
+    # keep local current_market in sync
     broker = PaperBroker(position_store, venue=current_market)
     engine = TradingEngine(position_store, TraderSettings(), broker)
 

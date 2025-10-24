@@ -101,9 +101,24 @@ with llm_col:
     )
     if new_market != cur_market:
         if save_market_mode(new_market):
+            # Keep fee schedule and execution venue in sync with Market Mode
+            try:
+                # Update fee market (new value should override existing)
+                fees_cur = load_trader_fee_settings()
+                _ = save_trader_fee_settings({**fees_cur, "market": str(new_market)})
+            except Exception:
+                pass
+            try:
+                # Update execution venue
+                ex_cur = load_execution_settings()
+                _ = save_execution_settings({**ex_cur, "venue": str(new_market)})
+            except Exception:
+                pass
             st.success(
-                f"✓ Market set to {new_market}. The collector will switch shortly."
+                f"✓ Market set to {new_market}. Collector, fees, and venue synced."
             )
+            # Refresh to reflect updated fee market immediately
+            st.rerun()
         else:
             st.error("Failed to save market mode")
 
@@ -116,12 +131,7 @@ with llm_col:
         index=(0 if exec_cur.get("mode") == "paper" else 1),
         help="Paper = no real orders. Live = send orders (requires keys).",
     )
-    exec_venue = st.selectbox(
-        "Venue",
-        options=["spot", "futures"],
-        index=(0 if exec_cur.get("venue") == "spot" else 1),
-        help="Choose where to execute trades.",
-    )
+    st.caption(f"Venue: derived from Market Mode → {cur_market}")
     exec_network = st.selectbox(
         "Network",
         options=["testnet", "mainnet"],
@@ -136,7 +146,7 @@ with llm_col:
         ok = save_execution_settings(
             {
                 "mode": exec_mode,
-                "venue": exec_venue,
+                "venue": str(cur_market),  # derived from Market Mode
                 "network": exec_network,
                 "api_key": api_key.strip() or None,
                 "api_secret": api_secret.strip() or None,

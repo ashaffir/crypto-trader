@@ -45,26 +45,38 @@ def render_common_sidebar(st):
 
 
 def render_status_badge(st) -> None:
-    """Render a small right-aligned status badge (Running/Stopped).
+    """Render a right-aligned status badge with status + market + mode.
 
-    Intended for use on non-Home pages. Reads the effective bot status and shows
-    a colored pill: green when running, red when stopped.
+    - Status: Running/Stopped (from bot heartbeat)
+    - Market: spot/futures (from runtime_config.json > market or config)
+    - Mode: paper/live (from runtime_config.json > execution.mode)
     """
-    from .control_utils import get_effective_status
+    from .control_utils import get_effective_status, RCM
 
     status = get_effective_status()
     running = str(status).lower() == "running"
-
-    color = "#16a34a" if running else "#dc2626"  # green-600 / red-600
+    color = "#16a34a" if running else "#dc2626"
     bg = "rgba(22,163,74,0.12)" if running else "rgba(220,38,38,0.12)"
     text = "RUNNING" if running else "STOPPED"
+
+    # Pull market and execution mode (best-effort; tolerate missing file)
+    try:
+        overrides = RCM.read() or {}
+        market = str((overrides.get("market") or "spot")).lower()
+        ex = overrides.get("execution") if isinstance(overrides, dict) else None
+        mode = str((ex or {}).get("mode") or "paper").lower()
+    except Exception:
+        market = "spot"
+        mode = "paper"
+
+    pill = f"{text} · {market.upper()} · {mode.upper()}"
 
     st.markdown(
         f"""
 <div style="display:flex; justify-content:flex-end; margin-top:-0.5rem;">
   <span style="display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; background:{bg}; color:{color}; font-weight:600; font-size:12px; letter-spacing:0.02em;">
     <span style="width:8px; height:8px; border-radius:999px; background:{color}; box-shadow:0 0 0 2px rgba(0,0,0,0.05);"></span>
-    {text}
+    {pill}
   </span>
 </div>
         """,
