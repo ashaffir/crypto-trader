@@ -32,6 +32,8 @@ class Position:
     llm_model: Optional[str] = None
     best_favorable_px: Optional[float] = None
     close_reason: Optional[str] = None
+    venue: Optional[str] = None  # "spot" | "futures"
+    exec_mode: Optional[str] = None  # "paper" | "live"
 
 
 class PositionStore:
@@ -64,7 +66,9 @@ class PositionStore:
                     pnl REAL,
                     llm_model TEXT,
                     best_favorable_px REAL,
-                    close_reason TEXT
+                    close_reason TEXT,
+                    venue TEXT,
+                    exec_mode TEXT
                 )
                 """
             )
@@ -87,6 +91,10 @@ class PositionStore:
                     conn.execute("ALTER TABLE positions ADD COLUMN close_reason TEXT")
                 if "notional" not in cols:
                     conn.execute("ALTER TABLE positions ADD COLUMN notional REAL")
+                if "venue" not in cols:
+                    conn.execute("ALTER TABLE positions ADD COLUMN venue TEXT")
+                if "exec_mode" not in cols:
+                    conn.execute("ALTER TABLE positions ADD COLUMN exec_mode TEXT")
             except Exception:
                 pass
 
@@ -101,6 +109,8 @@ class PositionStore:
         entry_px: Optional[float] = None,
         confidence: Optional[float] = None,
         llm_model: Optional[str] = None,
+        venue: Optional[str] = None,
+        exec_mode: Optional[str] = None,
     ) -> int:
         direction_norm = "long" if direction in ("buy", "long") else "short"
         # Compute notional exposure if data available: qty * entry_px * leverage
@@ -113,8 +123,10 @@ class PositionStore:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO positions(symbol, direction, leverage, opened_ts_ms, qty, entry_px, notional, confidence, llm_model, best_favorable_px)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO positions(
+                    symbol, direction, leverage, opened_ts_ms, qty, entry_px, notional,
+                    confidence, llm_model, best_favorable_px, venue, exec_mode
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     symbol.upper(),
@@ -127,6 +139,8 @@ class PositionStore:
                     confidence,
                     llm_model,
                     entry_px,
+                    (venue if venue in ("spot", "futures") else None),
+                    (exec_mode if exec_mode in ("paper", "live") else None),
                 ],
             )
             return int(cur.lastrowid)

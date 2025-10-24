@@ -73,8 +73,9 @@ class Broker(Protocol):
 
 
 class PaperBroker:
-    def __init__(self, store: PositionStore) -> None:
+    def __init__(self, store: PositionStore, *, venue: str = "spot") -> None:
         self.store = store
+        self.venue = "futures" if str(venue).lower() == "futures" else "spot"
 
     def open_position(
         self,
@@ -96,6 +97,8 @@ class PaperBroker:
             entry_px=entry_px,
             confidence=(meta or {}).get("confidence"),
             llm_model=(meta or {}).get("llm_model"),
+            venue=self.venue,
+            exec_mode="paper",
         )
         return pid
 
@@ -165,6 +168,8 @@ class BinanceBrokerSkeleton:
             entry_px=entry_px,
             confidence=(meta or {}).get("confidence"),
             llm_model=(meta or {}).get("llm_model"),
+            venue=str(self.settings.venue).lower(),
+            exec_mode=("live" if self.enabled else "paper"),
         )
 
     def close_position(

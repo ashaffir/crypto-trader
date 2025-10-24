@@ -56,6 +56,9 @@ def _read_all() -> pd.DataFrame:
         "exit_px",
         "pnl",
         "close_reason",
+        # New optional metadata columns
+        "venue",
+        "exec_mode",
     ]
     order = [c for c in preferred if c in df.columns] + [
         c for c in df.columns if c not in preferred
@@ -69,7 +72,11 @@ if df.empty:
 else:
     # Filters
     symbols = sorted(df["symbol"].dropna().unique().tolist()) if "symbol" in df else []
-    col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
+    venues = sorted(df["venue"].dropna().unique().tolist()) if "venue" in df else []
+    modes = (
+        sorted(df["exec_mode"].dropna().unique().tolist()) if "exec_mode" in df else []
+    )
+    col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 2])
     with col_f1:
         sel_syms = st.multiselect(
             "Symbols",
@@ -77,6 +84,18 @@ else:
             default=symbols,
         )
     with col_f2:
+        sel_venue = st.selectbox(
+            "Venue",
+            options=(["All"] + venues if venues else ["All"]),
+            index=0,
+        )
+    with col_f3:
+        sel_mode = st.selectbox(
+            "Mode",
+            options=(["All"] + modes if modes else ["All"]),
+            index=0,
+        )
+    with col_f4:
         status_opt = st.selectbox("Status", options=["All", "Open", "Closed"], index=0)
 
     # Derived columns
@@ -148,6 +167,10 @@ else:
     # Apply filters
     if sel_syms:
         df = df[df["symbol"].isin(sel_syms)]
+    if sel_venue != "All" and "venue" in df.columns:
+        df = df[df["venue"] == sel_venue]
+    if sel_mode != "All" and "exec_mode" in df.columns:
+        df = df[df["exec_mode"] == sel_mode]
     if status_opt != "All":
         df = df[df["status"] == status_opt]
 

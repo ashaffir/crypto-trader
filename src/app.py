@@ -47,7 +47,8 @@ async def pipeline() -> None:
     position_store = PositionStore()
     # Execution/broker setup (safe defaults)
     exec_settings = ExecutionSettings.from_overrides(None)
-    broker = PaperBroker(position_store)
+    current_market = str(getattr(cfg, "market", "spot")).lower()
+    broker = PaperBroker(position_store, venue=current_market)
     engine = TradingEngine(position_store, TraderSettings(), broker)
 
     # ---- LLM Recommender State ----
@@ -170,7 +171,7 @@ async def pipeline() -> None:
                     # Rebuild broker if execution settings changed
                     try:
                         new_exec = ExecutionSettings.from_overrides(_ovr)
-                        nonlocal exec_settings, broker
+                        nonlocal exec_settings, broker, current_market
                         if new_exec != exec_settings:
                             exec_settings = new_exec
                             if exec_settings.mode == "live":
@@ -178,11 +179,34 @@ async def pipeline() -> None:
                                     position_store, exec_settings
                                 )
                             else:
-                                broker = PaperBroker(position_store)
+                                # update venue based on runtime market
+                                rt_market = str(
+                                    (_ovr or {}).get("market") or current_market
+                                ).lower()
+                                broker = PaperBroker(position_store, venue=rt_market)
                             engine.broker = broker
                             logger.info(
                                 f"Broker switched: mode={exec_settings.mode}, venue={exec_settings.venue}, network={exec_settings.network}"
                             )
+                        # Handle market toggle while in paper mode
+                        try:
+                            rt_market = str(
+                                (_ovr or {}).get("market") or current_market
+                            ).lower()
+                            if (
+                                exec_settings.mode != "live"
+                                and rt_market != current_market
+                            ):
+                                current_market = rt_market
+                                broker = PaperBroker(
+                                    position_store, venue=current_market
+                                )
+                                engine.broker = broker
+                                logger.info(
+                                    f"Paper broker venue updated to {current_market}"
+                                )
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 except Exception:
