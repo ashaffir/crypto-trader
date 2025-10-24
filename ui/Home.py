@@ -12,6 +12,7 @@ from ui.lib.control_utils import (
     set_desired_state,
     get_effective_status,
 )
+from ui.lib.settings_state import load_supervisor_settings, save_supervisor_settings
 
 
 st.set_page_config(page_title="Home", layout="wide")
@@ -53,4 +54,33 @@ try:
 except Exception:
     pass
 
+st.write("")
+
+# --- Max runtime control ---
+try:
+    sup = load_supervisor_settings()
+    current_minutes = int(sup.get("max_run_minutes", 0))
+except Exception:
+    current_minutes = 0
+
+col_left, col_right = st.columns([1, 3])
+with col_left:
+    new_minutes = st.number_input(
+        "Max run time [minutes]",
+        min_value=0,
+        max_value=24 * 60,
+        value=current_minutes,
+        help="Set to 0 for unlimited. When non-zero, the bot will stop automatically once the time limit is reached.",
+        step=1,
+        key="max_run_minutes_input",
+    )
+
+if int(new_minutes) != int(current_minutes):
+    ok = save_supervisor_settings({"max_run_minutes": int(new_minutes)})
+    if ok:
+        st.toast("Max runtime saved")
+    else:
+        st.error("Failed to save max runtime setting")
+
+# Spacer
 st.write("")

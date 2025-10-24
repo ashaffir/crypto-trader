@@ -30,6 +30,7 @@ class Position:
     exit_px: Optional[float] = None
     pnl: Optional[float] = None
     llm_model: Optional[str] = None
+    llm_window_s: Optional[int] = None
     best_favorable_px: Optional[float] = None
     close_reason: Optional[str] = None
     venue: Optional[str] = None  # "spot" | "futures"
@@ -65,6 +66,7 @@ class PositionStore:
                     exit_px REAL,
                     pnl REAL,
                     llm_model TEXT,
+                    llm_window_s INTEGER,
                     best_favorable_px REAL,
                     close_reason TEXT,
                     venue TEXT,
@@ -83,6 +85,10 @@ class PositionStore:
                 }
                 if "llm_model" not in cols:
                     conn.execute("ALTER TABLE positions ADD COLUMN llm_model TEXT")
+                if "llm_window_s" not in cols:
+                    conn.execute(
+                        "ALTER TABLE positions ADD COLUMN llm_window_s INTEGER"
+                    )
                 if "best_favorable_px" not in cols:
                     conn.execute(
                         "ALTER TABLE positions ADD COLUMN best_favorable_px REAL"
@@ -109,6 +115,7 @@ class PositionStore:
         entry_px: Optional[float] = None,
         confidence: Optional[float] = None,
         llm_model: Optional[str] = None,
+        llm_window_s: Optional[int] = None,
         venue: Optional[str] = None,
         exec_mode: Optional[str] = None,
     ) -> int:
@@ -125,8 +132,8 @@ class PositionStore:
                 """
                 INSERT INTO positions(
                     symbol, direction, leverage, opened_ts_ms, qty, entry_px, notional,
-                    confidence, llm_model, best_favorable_px, venue, exec_mode
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    confidence, llm_model, llm_window_s, best_favorable_px, venue, exec_mode
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     symbol.upper(),
@@ -138,6 +145,7 @@ class PositionStore:
                     notional_value,
                     confidence,
                     llm_model,
+                    (int(llm_window_s) if llm_window_s is not None else None),
                     entry_px,
                     (venue if venue in ("spot", "futures") else None),
                     (exec_mode if exec_mode in ("paper", "live") else None),

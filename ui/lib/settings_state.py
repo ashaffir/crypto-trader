@@ -473,3 +473,81 @@ def save_execution_settings(settings: dict, base_dir: Optional[str] = None) -> b
             cur[k] = settings[k]
     merged["execution"] = cur
     return _safe_write_json(path, merged)
+
+
+def load_supervisor_settings(base_dir: Optional[str] = None) -> dict:
+    """Load supervisor settings nested under top-level key 'supervisor'.
+
+    Defaults:
+      max_run_minutes = 0 (0 means unlimited)
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("supervisor") if isinstance(cfg, dict) else None
+    out: dict[str, object] = {
+        "max_run_minutes": 0,
+    }
+    if isinstance(raw, dict):
+        try:
+            m = int(raw.get("max_run_minutes", 0))
+            if m < 0:
+                m = 0
+            out["max_run_minutes"] = m
+        except Exception:
+            pass
+    return out
+
+
+def save_supervisor_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist supervisor settings under top-level 'supervisor' key."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    current = load_supervisor_settings(base_dir)
+
+    if isinstance(settings, dict) and "max_run_minutes" in settings:
+        try:
+            m = int(settings.get("max_run_minutes", 0))
+            if m < 0:
+                m = 0
+            current["max_run_minutes"] = m
+        except Exception:
+            pass
+
+    merged["supervisor"] = current
+    return _safe_write_json(path, merged)
+
+
+# ---- Statistics page settings ----
+
+
+def load_statistics_settings(base_dir: Optional[str] = None) -> dict:
+    """Load statistics page settings from runtime_config.json under key 'statistics'.
+
+    Defaults:
+      pnl_group_by = "LLM Model"
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("statistics") if isinstance(cfg, dict) else None
+    out: dict[str, object] = {
+        "pnl_group_by": "LLM Model",
+    }
+    if isinstance(raw, dict):
+        for k in list(out.keys()):
+            if k in raw:
+                out[k] = raw[k]
+    return out
+
+
+def save_statistics_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist statistics page settings under key 'statistics'."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    cur = load_statistics_settings(base_dir)
+    if isinstance(settings, dict):
+        for k, v in settings.items():
+            cur[k] = v
+    merged["statistics"] = cur
+    return _safe_write_json(path, merged)

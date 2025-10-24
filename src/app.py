@@ -326,6 +326,7 @@ async def pipeline() -> None:
                                     ts_ms=now_ms,
                                     price_info=price_info,
                                     llm_model=str(getattr(llm_client.cfg, "model", "")),
+                                    llm_window_s=llm_window_s,
                                 )
                             except Exception:
                                 # Ignore malformed recs

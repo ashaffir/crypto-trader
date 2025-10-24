@@ -103,6 +103,7 @@ class TradingEngine:
         ts_ms: int,
         price_info: Dict[str, Any] | None,
         llm_model: Optional[str],
+        llm_window_s: Optional[int] = None,
     ) -> Optional[int]:
         # Slot check
         if self.store.count_open() >= self.settings.concurrent_positions:
@@ -140,7 +141,11 @@ class TradingEngine:
             qty=qty,
             entry_px=entry_px,
             ts_ms=int(ts_ms),
-            meta={"confidence": confidence, "llm_model": llm_model},
+            meta={
+                "confidence": confidence,
+                "llm_model": llm_model,
+                "llm_window_s": llm_window_s,
+            },
         )
         return pid
 

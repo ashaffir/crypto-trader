@@ -11,8 +11,21 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from ui.lib.common import render_status_badge
-from ui.lib.statistics_utils import load_positions_dataframe, compute_pnl_series
-from ui.lib.settings_state import load_tracked_symbols, load_sidebar_settings
+from ui.lib.statistics_utils import (
+    load_positions_dataframe,
+    compute_pnl_series,
+    compute_pnl_series_by_model,
+    compute_close_reason_distribution_by_model,
+    compute_window_pnl_correlation,
+    summarize_window_pnl_correlation,
+)
+from ui.lib.settings_state import (
+    load_tracked_symbols,
+    load_sidebar_settings,
+    load_statistics_settings,
+    save_statistics_settings,
+    load_window_seconds,
+)
 
 try:
     from streamlit_autorefresh import st_autorefresh as _st_autorefresh  # type: ignore
@@ -67,6 +80,20 @@ with col3:
 with col4:
     bar_mode = st.selectbox("Bar Mode", options=["stack", "group", "overlay"], index=0)
 
+# Additional grouping control (remember last)
+_stats = load_statistics_settings()
+group_by = st.selectbox(
+    "Group By",
+    options=["LLM Model", "Symbol", "None"],
+    index=["LLM Model", "Symbol", "None"].index(
+        str(_stats.get("pnl_group_by", "LLM Model"))
+    ),
+)
+try:
+    save_statistics_settings({"pnl_group_by": group_by})
+except Exception:
+    pass
+
 # Load and filter data
 df = load_positions_dataframe()
 if df.empty:
@@ -76,7 +103,10 @@ if df.empty:
 if selected_symbols:
     df = df[df["symbol"].isin([s.upper() for s in selected_symbols])]
 
-trades_df, cum_df = compute_pnl_series(df)
+if group_by == "LLM Model":
+    trades_df, cum_df = compute_pnl_series_by_model(df)
+else:
+    trades_df, cum_df = compute_pnl_series(df)
 
 if trades_df.empty and cum_df.empty:
     st.info("No closed positions with PnL to plot yet.")
@@ -95,12 +125,25 @@ def _to_datetime_index(idx: pd.Index) -> pd.Index:
         return pd.to_datetime([], unit="s")
 
 
-# Per-trade bars: either stacked by symbol or single series
+# Per-trade bars: group by selected dimension
 if show_trades and not trades_df.empty:
     bars_df = trades_df.copy()
     bars_df["dt"] = _to_datetime_index(bars_df.index)
-    if "symbol" in bars_df.columns and len(selected_symbols) > 1:
-        # group by symbol
+    if group_by == "LLM Model" and "llm_model" in bars_df.columns:
+        for mdl, g in bars_df.groupby("llm_model"):
+            fig.add_trace(
+                go.Bar(
+                    x=g["dt"],
+                    y=g["pnl"],
+                    name=f"Trade PnL · {mdl}",
+                    opacity=0.75,
+                )
+            )
+    elif (
+        group_by == "Symbol"
+        and "symbol" in bars_df.columns
+        and len(selected_symbols) > 1
+    ):
         for sym, g in bars_df.groupby("symbol"):
             fig.add_trace(
                 go.Bar(
@@ -120,20 +163,34 @@ if show_trades and not trades_df.empty:
             )
         )
 
-# Cumulative line
+# Cumulative line(s)
 if show_cum and not cum_df.empty:
-    c = cum_df.copy()
-    c["dt"] = _to_datetime_index(c.index)
-    fig.add_trace(
-        go.Scatter(
-            x=c["dt"],
-            y=c["cum_pnl"],
-            mode="lines",
-            name="Cumulative PnL",
-            line=dict(color="#2563eb", width=2),
-            yaxis="y2" if show_trades else "y",
+    if group_by == "LLM Model" and "llm_model" in cum_df.columns:
+        for mdl, g in cum_df.reset_index().groupby("llm_model"):
+            g = g.sort_values("ts")
+            dt = _to_datetime_index(pd.Index(g["ts"].astype("int64")))
+            fig.add_trace(
+                go.Scatter(
+                    x=dt,
+                    y=g["cum_pnl"],
+                    mode="lines",
+                    name=f"Cumulative · {mdl}",
+                    yaxis="y2" if show_trades else "y",
+                )
+            )
+    else:
+        c = cum_df.copy()
+        c["dt"] = _to_datetime_index(c.index)
+        fig.add_trace(
+            go.Scatter(
+                x=c["dt"],
+                y=c["cum_pnl"],
+                mode="lines",
+                name="Cumulative PnL",
+                line=dict(color="#2563eb", width=2),
+                yaxis="y2" if show_trades else "y",
+            )
         )
-    )
 
 # Layout with range slider + selectors and uirevision (preserve zoom on rerun)
 fig.update_layout(
@@ -212,6 +269,77 @@ config = {
 }
 
 st.plotly_chart(fig, use_container_width=True, config=config)
+
+# ---- Additional charts ----
+st.subheader("Close Reasons by LLM Model")
+try:
+    dist_df = compute_close_reason_distribution_by_model(df)
+    if dist_df.empty:
+        st.caption("No close reason data available yet.")
+    else:
+        import plotly.express as px  # local import to avoid global dependency at top
+
+        fig2 = px.bar(
+            dist_df,
+            x="llm_model",
+            y="count",
+            color="close_reason",
+            barmode="stack",
+            title=None,
+        )
+        fig2.update_layout(height=380, template="plotly_white")
+        st.plotly_chart(fig2, use_container_width=True, config={"displaylogo": False})
+except Exception:
+    st.caption("Close reason chart unavailable.")
+
+st.subheader("Window Size vs PnL by LLM Model")
+try:
+    current_window = load_window_seconds()
+    corr_df = compute_window_pnl_correlation(df, current_window)
+    if corr_df.empty:
+        st.caption("No closed trades to compute correlation.")
+    else:
+        import plotly.express as px
+
+        col_a, col_b = st.columns([3, 2])
+        with col_a:
+            fig3 = px.scatter(
+                corr_df,
+                x="window_seconds",
+                y="pnl",
+                color="llm_model",
+                trendline="ols",
+                title=None,
+            )
+            fig3.update_layout(
+                height=420,
+                template="plotly_white",
+                xaxis_title="Window (s)",
+                yaxis_title="Trade PnL",
+            )
+            st.plotly_chart(
+                fig3, use_container_width=True, config={"displaylogo": False}
+            )
+        with col_b:
+            summ = summarize_window_pnl_correlation(corr_df)
+            if summ.empty:
+                st.caption("Not enough data for summary.")
+            else:
+                # Display compact table with rounded values
+                df_show = summ.copy()
+                try:
+                    df_show["pearson_r"] = df_show["pearson_r"].round(3)
+                    df_show["slope"] = df_show["slope"].round(5)
+                    df_show["intercept"] = df_show["intercept"].round(2)
+                except Exception:
+                    pass
+                st.dataframe(
+                    df_show,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+except Exception:
+    st.caption("Correlation chart unavailable.")
 
 # Optional user annotation controls
 with st.expander("Add custom annotation"):

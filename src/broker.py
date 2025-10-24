@@ -97,6 +97,7 @@ class PaperBroker:
             entry_px=entry_px,
             confidence=(meta or {}).get("confidence"),
             llm_model=(meta or {}).get("llm_model"),
+            llm_window_s=(meta or {}).get("llm_window_s"),
             venue=self.venue,
             exec_mode="paper",
         )
@@ -168,6 +169,7 @@ class BinanceBrokerSkeleton:
             entry_px=entry_px,
             confidence=(meta or {}).get("confidence"),
             llm_model=(meta or {}).get("llm_model"),
+            llm_window_s=(meta or {}).get("llm_window_s"),
             venue=str(self.settings.venue).lower(),
             exec_mode=("live" if self.enabled else "paper"),
         )
