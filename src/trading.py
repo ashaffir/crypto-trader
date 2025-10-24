@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from .positions import PositionStore
+from .broker import Broker, PaperBroker
 from .utils.fees import estimate_trade_fees_usd
 
 
@@ -77,9 +78,16 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
 
 
 class TradingEngine:
-    def __init__(self, store: PositionStore, settings: TraderSettings) -> None:
+    def __init__(
+        self,
+        store: PositionStore,
+        settings: TraderSettings,
+        broker: Broker | None = None,
+    ) -> None:
         self.store = store
         self.settings = settings
+        # Default to paper broker if none provided
+        self.broker: Broker = broker or PaperBroker(store)
 
     def update_settings(self, settings: TraderSettings) -> None:
         self.settings = settings
@@ -125,15 +133,14 @@ class TradingEngine:
         except Exception:
             qty = None
 
-        pid = self.store.open_position(
+        pid = self.broker.open_position(
             symbol=symbol,
             direction=direction,
             leverage=int(lev or 1),
-            opened_ts_ms=int(ts_ms),
             qty=qty,
             entry_px=entry_px,
-            confidence=confidence,
-            llm_model=llm_model,
+            ts_ms=int(ts_ms),
+            meta={"confidence": confidence, "llm_model": llm_model},
         )
         return pid
 
@@ -173,12 +180,13 @@ class TradingEngine:
                 if opened is not None:
                     max_age_ms = int(expire_min) * 60_000
                     if int(ts_ms) - opened >= max_age_ms:
-                        self.store.close_position(
-                            pos["id"],
-                            ts_ms,
+                        self.broker.close_position(
+                            position_id=int(pos["id"]),
+                            symbol=symbol,
                             exit_px=exit_px,
+                            ts_ms=int(ts_ms),
                             pnl=None,
-                            close_reason="Stale",
+                            reason="Stale",
                         )
                         return int(pos["id"])  # closed by Stale
         except Exception:
@@ -273,8 +281,13 @@ class TradingEngine:
         """
         # Default: let store compute pnl if fees disabled or insufficient data
         if not self.settings.fees_enabled or exit_px is None:
-            self.store.close_position(
-                pos["id"], ts_ms, exit_px=exit_px, pnl=None, close_reason=close_reason
+            self.broker.close_position(
+                position_id=int(pos["id"]),
+                symbol=str(pos.get("symbol")),
+                exit_px=exit_px,
+                ts_ms=int(ts_ms),
+                pnl=None,
+                reason=close_reason,
             )
             return
 
@@ -330,12 +343,13 @@ class TradingEngine:
         except Exception:
             net_pnl = gross_pnl
 
-        self.store.close_position(
-            pos["id"],
-            ts_ms,
+        self.broker.close_position(
+            position_id=int(pos["id"]),
+            symbol=str(pos.get("symbol")),
             exit_px=exit_px,
+            ts_ms=int(ts_ms),
             pnl=float(net_pnl),
-            close_reason=close_reason,
+            reason=close_reason,
         )
 
 

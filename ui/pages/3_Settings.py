@@ -23,6 +23,10 @@ from ui.lib.settings_state import (
     save_trader_settings,
     load_trader_fee_settings,
     save_trader_fee_settings,
+    load_market_mode,
+    save_market_mode,
+    load_execution_settings,
+    save_execution_settings,
 )
 from ui.lib.logbook_utils import read_latest_file
 from ui.lib.common import LOGBOOK_DIR
@@ -39,7 +43,7 @@ symbols = load_tracked_symbols()
 sym_text = st.text_input(
     "Symbols (comma separated)",
     value=", ".join(symbols) if symbols else "BTCUSDT",
-    help="Enter spot symbols like BTCUSDT, ETHUSDT",
+    help="Enter spot or futures symbols like BTCUSDT",
 )
 
 
@@ -85,6 +89,63 @@ with llm_col:
             st.error("Failed to save window size")
 
     st.markdown("---")
+
+    st.markdown("**Market Mode**")
+    cur_market = load_market_mode()
+    new_market = st.radio(
+        "Select Market",
+        options=["spot", "futures"],
+        index=(0 if cur_market == "spot" else 1),
+        horizontal=True,
+        help="Choose which market to collect from and simulate fees for",
+    )
+    if new_market != cur_market:
+        if save_market_mode(new_market):
+            st.success(
+                f"✓ Market set to {new_market}. The collector will switch shortly."
+            )
+        else:
+            st.error("Failed to save market mode")
+
+    st.markdown("---")
+    st.markdown("**Execution Mode**")
+    exec_cur = load_execution_settings()
+    exec_mode = st.selectbox(
+        "Mode",
+        options=["paper", "live"],
+        index=(0 if exec_cur.get("mode") == "paper" else 1),
+        help="Paper = no real orders. Live = send orders (requires keys).",
+    )
+    exec_venue = st.selectbox(
+        "Venue",
+        options=["spot", "futures"],
+        index=(0 if exec_cur.get("venue") == "spot" else 1),
+        help="Choose where to execute trades.",
+    )
+    exec_network = st.selectbox(
+        "Network",
+        options=["testnet", "mainnet"],
+        index=(0 if exec_cur.get("network") == "testnet" else 1),
+        help="Use testnet for safe testing.",
+    )
+    api_key = st.text_input("API Key", value=str(exec_cur.get("api_key") or ""))
+    api_secret = st.text_input(
+        "API Secret", value=str(exec_cur.get("api_secret") or ""), type="password"
+    )
+    if st.button("Save Execution Settings"):
+        ok = save_execution_settings(
+            {
+                "mode": exec_mode,
+                "venue": exec_venue,
+                "network": exec_network,
+                "api_key": api_key.strip() or None,
+                "api_secret": api_secret.strip() or None,
+            }
+        )
+        if ok:
+            st.success("✓ Execution settings saved")
+        else:
+            st.error("Failed to save execution settings")
 
     # Load configs
     llm_configs = load_llm_configs()

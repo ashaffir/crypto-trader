@@ -47,32 +47,28 @@ def _read_recent_snapshots(
     if not os.path.exists(snapshot_path):
         return pd.DataFrame()
 
-    # Find all parquet files and get their timestamps from filenames
-    # Filename format: part-{microsecond_timestamp}.parquet
-    all_files = glob.glob(os.path.join(snapshot_path, "part-*.parquet"))
+    # Find all parquet files regardless of naming pattern
+    all_files = glob.glob(os.path.join(snapshot_path, "*.parquet"))
 
     if not all_files:
         return pd.DataFrame()
 
-    # Extract timestamps from filenames and filter to relevant time window
-    # File timestamp is in microseconds, convert to milliseconds
+    # Try to use filename timestamps if present; otherwise include all files
+    # Filename format sometimes: part-{microsecond_timestamp}.parquet
     start_file_ts = (start_ts_ms - 2000) * 1000  # 2s buffer before
     end_file_ts = (end_ts_ms + 2000) * 1000  # 2s buffer after
 
     relevant_files = []
     for file_path in all_files:
+        basename = os.path.basename(file_path)
+        ts_candidate = basename.replace("part-", "").replace(".parquet", "")
         try:
-            # Extract timestamp from filename: part-1760959883090106.parquet
-            basename = os.path.basename(file_path)
-            ts_str = basename.replace("part-", "").replace(".parquet", "")
-            file_ts = int(ts_str)
-
-            # Only include files within our time window
+            file_ts = int(ts_candidate)
             if start_file_ts <= file_ts <= end_file_ts:
                 relevant_files.append(file_path)
-        except (ValueError, AttributeError):
-            # Skip files that don't match expected format
-            continue
+        except Exception:
+            # If no parseable timestamp, include and let record-level ts_ms filter apply
+            relevant_files.append(file_path)
 
     logger.debug(
         f"Filtered {len(relevant_files)} of {len(all_files)} files for {symbol}"

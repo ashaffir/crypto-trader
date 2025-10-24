@@ -415,3 +415,61 @@ __all__ = [
     "load_sidebar_settings",
     "save_sidebar_settings",
 ]
+
+# ---- Market mode (spot/futures) helpers ----
+
+
+def load_market_mode(base_dir: Optional[str] = None) -> str:
+    """Load current market mode from runtime_config.json top-level key 'market'.
+
+    Defaults to 'spot' when missing/invalid.
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    val = str((cfg or {}).get("market", "spot")).lower()
+    return val if val in ("spot", "futures") else "spot"
+
+
+def save_market_mode(mode: str, base_dir: Optional[str] = None) -> bool:
+    """Persist market mode ('spot' | 'futures') under top-level 'market'."""
+    m = str(mode).lower()
+    if m not in ("spot", "futures"):
+        return False
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    merged["market"] = m
+    return _safe_write_json(path, merged)
+
+
+# ---- Execution settings (mode/venue/network/keys) ----
+
+
+def load_execution_settings(base_dir: Optional[str] = None) -> dict:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    ex = cfg.get("execution") if isinstance(cfg, dict) else None
+    out = {
+        "mode": "paper",
+        "venue": "spot",
+        "network": "testnet",
+        "api_key": None,
+        "api_secret": None,
+    }
+    if isinstance(ex, dict):
+        for k in out.keys():
+            if k in ex:
+                out[k] = ex[k]
+    return out
+
+
+def save_execution_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    cur = load_execution_settings(base_dir)
+    for k in cur.keys():
+        if k in settings:
+            cur[k] = settings[k]
+    merged["execution"] = cur
+    return _safe_write_json(path, merged)

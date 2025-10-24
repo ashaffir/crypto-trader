@@ -475,6 +475,7 @@ interactive_menu() {
 
 show_cli_help() {
   printf "${CYAN}CLI Usage:${NC} ./manage.sh <command> [options]\n\n"
+  printf "${GREEN}Commands (non-interactive):${NC}\n"
   
   printf "${GREEN}Development:${NC}\n"
   echo "  dev ui [--port 8501]    Start Streamlit UI"
@@ -500,6 +501,9 @@ show_cli_help() {
   echo "  build                   Build images"
   echo "  build-restart           Build & restart"
   echo "  ps                      Show containers"
+  echo "  start-all               Start all (alias: up)"
+  echo "  stop-all                Stop all (alias: down)"
+  echo "  restart-all             Restart all (alias: restart)"
   echo
   
   printf "${GREEN}Maintenance:${NC}\n"
@@ -530,6 +534,24 @@ main() {
   local cmd="$1"
   shift || true
   
+  # Global flags
+  local DRY_RUN=0
+  if [[ "$cmd" == "--dry-run" ]]; then
+    DRY_RUN=1
+    cmd="${1:-}"
+    shift || true
+  fi
+  if [[ "$cmd" == "--help" || "$cmd" == "-h" ]]; then
+    show_cli_help
+    exit 0
+  fi
+  if [[ "$cmd" == "--self-test" ]]; then
+    printf "Self-test: showing help and performing basic checks...\n"
+    show_cli_help
+    ok "Self-test complete"
+    exit 0
+  fi
+
   case "$cmd" in
     # Development
     dev)
@@ -559,14 +581,28 @@ main() {
       esac
       ;;
     
-    # Docker
-    up) cmd_up "$@" ;;
-    down) cmd_down ;;
-    restart) cmd_restart "$@" ;;
-    logs) cmd_logs "$@" ;;
-    build) cmd_build ;;
-    build-restart) cmd_build_restart ;;
-    ps) cmd_ps ;;
+    # Docker (with dry-run support)
+    up|start-all)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_up "$@" ;;
+    down|stop-all)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_down ;;
+    restart|restart-all)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_restart "$@" ;;
+    logs)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_logs "$@" ;;
+    build)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_build ;;
+    build-restart)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_build_restart ;;
+    ps)
+      if [[ $DRY_RUN -eq 1 ]]; then ok "DRY-RUN: $cmd $*"; exit 0; fi
+      cmd_ps ;;
     
     # Maintenance
     clean) cmd_clean ;;

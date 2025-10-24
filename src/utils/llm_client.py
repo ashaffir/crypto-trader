@@ -80,6 +80,11 @@ class LLMClient:
         # Replace {{DATA_WINDOW}} (which becomes {DATA_WINDOW} after .format) with strict JSON
         if "{DATA_WINDOW}" in formatted_user:
             formatted_user = formatted_user.replace("{DATA_WINDOW}", data_window_json)
+        else:
+            # If template has no placeholder, append a compact JSON block with DATA_WINDOW
+            formatted_user = (
+                formatted_user + "\n\nContext JSON (DATA_WINDOW):\n" + data_window_json
+            )
 
         # provider is already computed above
 

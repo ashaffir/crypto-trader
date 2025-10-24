@@ -7,7 +7,7 @@ from typing import Dict
 from loguru import logger
 
 from src.config import load_app_config
-from src.collector import SpotCollector
+from src.collector import SpotCollector, FuturesCollector
 from src.features import FeatureEngine
 from src.logger import ParquetLogbook
 from src.control import Control
@@ -15,6 +15,7 @@ from src.runtime_config import RuntimeConfigManager
 from src.utils.llm_client import LLMClient, LLMConfig
 from src.positions import PositionStore
 from src.trading import TradingEngine, TraderSettings, load_trader_settings
+from src.broker import ExecutionSettings, PaperBroker, BinanceBrokerSkeleton
 
 
 async def pipeline() -> None:
@@ -27,7 +28,12 @@ async def pipeline() -> None:
     # Track current symbols from config; can be hot-reloaded via runtime overrides
     current_symbols: list[str] = list(cfg.symbols)
 
-    collector = SpotCollector(current_symbols, vars(cfg.streams), queue)
+    # Choose collector based on market mode
+    collector = (
+        FuturesCollector(current_symbols, vars(cfg.streams), queue)
+        if str(getattr(cfg, "market", "spot")).lower() == "futures"
+        else SpotCollector(current_symbols, vars(cfg.streams), queue)
+    )
     features = FeatureEngine(
         symbols=current_symbols,
         vol_window_s=cfg.features.vol_1s,
@@ -39,7 +45,10 @@ async def pipeline() -> None:
     runtime_cfg = RuntimeConfigManager()
     # Trading components
     position_store = PositionStore()
-    engine = TradingEngine(position_store, TraderSettings())
+    # Execution/broker setup (safe defaults)
+    exec_settings = ExecutionSettings.from_overrides(None)
+    broker = PaperBroker(position_store)
+    engine = TradingEngine(position_store, TraderSettings(), broker)
 
     # ---- LLM Recommender State ----
     llm_client: LLMClient | None = None
@@ -158,6 +167,24 @@ async def pipeline() -> None:
                     _changed, _ovr = runtime_cfg.load_if_changed()
                     settings = load_trader_settings(_ovr)
                     engine.update_settings(settings)
+                    # Rebuild broker if execution settings changed
+                    try:
+                        new_exec = ExecutionSettings.from_overrides(_ovr)
+                        nonlocal exec_settings, broker
+                        if new_exec != exec_settings:
+                            exec_settings = new_exec
+                            if exec_settings.mode == "live":
+                                broker = BinanceBrokerSkeleton(
+                                    position_store, exec_settings
+                                )
+                            else:
+                                broker = PaperBroker(position_store)
+                            engine.broker = broker
+                            logger.info(
+                                f"Broker switched: mode={exec_settings.mode}, venue={exec_settings.venue}, network={exec_settings.network}"
+                            )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 # Aggregate per-symbol summaries and query LLM once per refresh
@@ -363,8 +390,16 @@ async def pipeline() -> None:
                                     collector_task.cancel()
                                 except Exception:
                                     pass
-                                collector = SpotCollector(
-                                    current_symbols, vars(cfg.streams), queue
+                                # Recreate collector preserving market mode
+                                market = str(getattr(cfg, "market", "spot")).lower()
+                                collector = (
+                                    FuturesCollector(
+                                        current_symbols, vars(cfg.streams), queue
+                                    )
+                                    if market == "futures"
+                                    else SpotCollector(
+                                        current_symbols, vars(cfg.streams), queue
+                                    )
                                 )
                                 features = FeatureEngine(
                                     symbols=current_symbols,

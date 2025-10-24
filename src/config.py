@@ -40,6 +40,8 @@ class UIConfig:
 @dataclass
 class AppConfig:
     symbols: List[str] = field(default_factory=lambda: ["BTCUSDT"])
+    # Market mode: "spot" or "futures"
+    market: str = "spot"
     streams: Streams = field(default_factory=Streams)
     features: FeatureWindows = field(default_factory=FeatureWindows)
     horizons: Horizons = field(default_factory=Horizons)
@@ -69,6 +71,7 @@ def load_app_config(config_path: str | None = None) -> AppConfig:
     # Build dataclasses
     return AppConfig(
         symbols=merged.get("symbols", ["BTCUSDT"]),
+        market=str(merged.get("market", "spot")).lower(),
         streams=Streams(**merged.get("streams", {})),
         features=FeatureWindows(**merged.get("features", {})),
         horizons=Horizons(**merged.get("horizons", {})),

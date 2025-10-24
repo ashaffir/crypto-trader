@@ -45,7 +45,7 @@ def tail_parquet_table(table: str, symbol: str, tail_files: int = 20) -> pd.Data
                     continue
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True, sort=False)
+        return _concat_non_empty(frames)
 
 
 def _table_cast_dictionary_to_string(tbl: "pa.Table") -> "pa.Table":
@@ -93,13 +93,38 @@ def read_latest_file(table: str, symbol: str) -> pd.DataFrame:
                 continue
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True, sort=False)
+        return _concat_non_empty(frames)
 
 
 __all__ = [
     "tail_parquet_table",
     "read_latest_file",
 ]
+
+
+def _concat_non_empty(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Concatenate DataFrames excluding empty or all-NA frames to avoid FutureWarning.
+
+    Returns empty DataFrame if no valid frames remain.
+    """
+    valid: list[pd.DataFrame] = []
+    for df in frames:
+        try:
+            if df is None:
+                continue
+            if not isinstance(df, pd.DataFrame):
+                continue
+            if df.empty:
+                continue
+            # Drop rows that are entirely NA to assess if anything remains
+            if df.dropna(how="all").empty:
+                continue
+            valid.append(df)
+        except Exception:
+            continue
+    if not valid:
+        return pd.DataFrame()
+    return pd.concat(valid, ignore_index=True, sort=False)
 
 
 def list_symbols_with_data(table: str) -> list[str]:

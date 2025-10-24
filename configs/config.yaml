@@ -1,5 +1,6 @@
 symbols:
   - BTCUSDT
+market: spot  # "spot" or "futures"
 streams:
   aggTrade: true
   depth_100ms: true

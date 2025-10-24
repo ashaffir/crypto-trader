@@ -9,6 +9,8 @@ from loguru import logger
 import websockets
 
 BINANCE_WS_BASE = "wss://stream.binance.com:9443/stream?streams="
+# Binance USDⓈ-M Futures combined stream base
+BINANCE_FUTURES_WS_BASE = "wss://fstream.binance.com/stream?streams="
 
 
 @dataclass
@@ -165,3 +167,13 @@ class SpotCollector:
                 logger.warning(f"WebSocket error: {e}. Reconnecting in {backoff}s")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
+
+
+class FuturesCollector(SpotCollector):
+    """Collector for Binance USDⓈ-M Futures market streams.
+
+    Reuses SpotCollector behavior but connects to the futures combined stream host.
+    """
+
+    def _url(self) -> str:
+        return BINANCE_FUTURES_WS_BASE + "/".join(self.build_streams())
