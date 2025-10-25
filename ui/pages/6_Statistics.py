@@ -18,6 +18,7 @@ from ui.lib.statistics_utils import (
     compute_close_reason_distribution_by_model,
     compute_window_pnl_correlation,
     summarize_window_pnl_correlation,
+    compute_confidence_vs_pnl,
 )
 from ui.lib.settings_state import (
     load_tracked_symbols,
@@ -340,6 +341,66 @@ try:
                 )
 except Exception:
     st.caption("Correlation chart unavailable.")
+
+# Confidence vs PnL scatter with model toggle
+st.subheader("Confidence vs PnL")
+try:
+    conf_df = compute_confidence_vs_pnl(df)
+    if conf_df.empty:
+        st.caption("No confidence-PnL data available.")
+    else:
+        import plotly.express as px
+
+        # Collect model options
+        models = (
+            conf_df["llm_model"].dropna().astype(str).unique().tolist()
+            if "llm_model" in conf_df.columns
+            else []
+        )
+        models = sorted(models)
+        sel = st.selectbox(
+            "LLM Model",
+            options=["All"] + models,
+            index=0,
+            key="conf_pnl_model_toggle",
+        )
+        plot_df = conf_df if sel == "All" else conf_df[conf_df["llm_model"] == sel]
+
+        # Use OLS trendline only if statsmodels is available
+        try:
+            import statsmodels.api as _sm  # type: ignore  # noqa: F401
+
+            _trend = "ols"
+        except Exception:
+            _trend = None
+
+        if sel == "All":
+            fig4 = px.scatter(
+                plot_df,
+                x="confidence",
+                y="pnl",
+                color="llm_model",
+                trendline=_trend,
+                title=None,
+            )
+        else:
+            fig4 = px.scatter(
+                plot_df,
+                x="confidence",
+                y="pnl",
+                trendline=_trend,
+                title=None,
+            )
+
+        fig4.update_layout(
+            height=420,
+            template="plotly_white",
+            xaxis_title="Confidence (0..1)",
+            yaxis_title="Trade PnL",
+        )
+        st.plotly_chart(fig4, use_container_width=True, config={"displaylogo": False})
+except Exception:
+    st.caption("Confidence chart unavailable.")
 
 # Optional user annotation controls
 with st.expander("Add custom annotation"):

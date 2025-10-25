@@ -331,3 +331,54 @@ def summarize_window_pnl_correlation(corr_df: pd.DataFrame) -> pd.DataFrame:
 
 
 __all__.append("summarize_window_pnl_correlation")
+
+
+def compute_confidence_vs_pnl(df: pd.DataFrame) -> pd.DataFrame:
+    """Return tidy DataFrame with columns [confidence, pnl, llm_model].
+
+    - Includes only closed trades with numeric pnl and confidence in [0,1].
+    - Normalizes missing/blank llm_model to "Unknown".
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["confidence", "pnl", "llm_model"])
+
+    work = df.copy()
+    # Keep closed with confidence and pnl
+    work = work[(~work["closed_ts_ms"].isna())]
+    if work.empty:
+        return pd.DataFrame(columns=["confidence", "pnl", "llm_model"])
+    # Coerce numeric
+    for c in ("pnl", "confidence"):
+        if c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+    # Filter to valid ranges
+    work = work.dropna(subset=["pnl", "confidence"]).copy()
+    if work.empty:
+        return pd.DataFrame(columns=["confidence", "pnl", "llm_model"])
+    work = work[(work["confidence"] >= 0.0) & (work["confidence"] <= 1.0)]
+    if work.empty:
+        return pd.DataFrame(columns=["confidence", "pnl", "llm_model"])
+
+    # Model label normalization
+    if "llm_model" not in work.columns:
+        work["llm_model"] = "Unknown"
+    else:
+        try:
+            work["llm_model"] = (
+                work["llm_model"].astype("string").fillna("Unknown").str.strip()
+            )
+            work.loc[work["llm_model"].isin(["", "nan", "None"]), "llm_model"] = (
+                "Unknown"
+            )
+        except Exception:
+            work["llm_model"] = "Unknown"
+
+    out = work[["confidence", "pnl", "llm_model"]].copy()
+    # Ensure proper dtypes
+    out["confidence"] = pd.to_numeric(out["confidence"], errors="coerce")
+    out["pnl"] = pd.to_numeric(out["pnl"], errors="coerce")
+    out = out.dropna(subset=["confidence", "pnl"]).reset_index(drop=True)
+    return out
+
+
+__all__.append("compute_confidence_vs_pnl")

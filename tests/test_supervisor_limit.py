@@ -23,3 +23,4 @@ def test_should_stop_reached_and_after():
     after = start + 61_000
     assert should_stop_by_time_limit(start, 1, reached) is True
     assert should_stop_by_time_limit(start, 1, after) is True
+
