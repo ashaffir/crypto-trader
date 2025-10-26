@@ -33,6 +33,15 @@ from ui.lib.common import LOGBOOK_DIR
 from src.utils.llm_client import LLMClient, LLMConfig
 from src.utils.data_window import construct_data_window
 import asyncio
+import json
+import httpx
+
+# Tiny order helper (uses saved execution settings)
+from src.tiny_order import (
+    place_spot_market_order as _tiny_place_order,
+    _load_execution as _tiny_load_exec,
+    _validate_ready as _tiny_validate_exec,
+)
 
 
 st.set_page_config(page_title="Settings", layout="wide")
@@ -156,6 +165,96 @@ with llm_col:
             st.success("✓ Execution settings saved")
         else:
             st.error("Failed to save execution settings")
+
+    # ---- Tiny Order Test (Spot) ----
+    st.markdown("")
+    with st.expander("Tiny Order Test (Spot)"):
+        st.caption(
+            "Places a MARKET order using the saved Execution Settings. Uses quote amount (e.g., USDT)."
+        )
+        ex_saved = _tiny_load_exec()
+        net_text = str(ex_saved.get("network", "testnet"))
+        mode_text = str(ex_saved.get("mode", "paper"))
+        st.write(
+            f"Saved mode: `{mode_text}` · network: `{net_text}` · venue: `{ex_saved.get('venue', 'spot')}`"
+        )
+
+        default_symbol = (load_tracked_symbols() or ["BTCUSDT"])[0]
+        to_symbol = st.text_input("Symbol", value=default_symbol, key="tiny_symbol")
+        to_side = st.radio(
+            "Side", options=["BUY", "SELL"], horizontal=True, key="tiny_side"
+        )
+        to_amount = st.number_input(
+            "Quote Amount",
+            min_value=0.0,
+            value=5.0,
+            step=0.1,
+            help="Amount in quote currency (e.g., USDT)",
+            key="tiny_amount",
+        )
+
+        # Extra confirmation for mainnet
+        confirm_label = (
+            "I understand this places a REAL order on MAINNET"
+            if net_text == "mainnet"
+            else "Confirm"
+        )
+        confirmed = st.checkbox(confirm_label, value=False, key="tiny_confirm")
+
+        async def _place_async() -> None:
+            ex = _tiny_load_exec()
+            err = _tiny_validate_exec(ex)
+            if err:
+                st.error(err)
+                return
+            try:
+                res = await _tiny_place_order(
+                    symbol=str(to_symbol).strip().upper(),
+                    side=str(to_side).upper(),
+                    quote_qty=float(to_amount),
+                    ex=ex,
+                )
+                st.success("✓ Order accepted")
+                st.json(res)
+            except httpx.HTTPStatusError as e:  # Show Binance error body clearly
+                try:
+                    st.error(f"HTTP {e.response.status_code}")
+                    st.json(e.response.json())
+                except Exception:
+                    st.error(f"HTTP {e.response.status_code}: {e.response.text}")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Failed: {e}")
+
+        def _place_sync() -> None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                import threading
+
+                _err = {"e": None}
+
+                def _runner():
+                    try:
+                        asyncio.run(_place_async())
+                    except Exception as e:  # noqa: BLE001
+                        _err["e"] = e
+
+                t = threading.Thread(target=_runner, daemon=True)
+                t.start()
+                t.join()
+                if _err["e"] is not None:
+                    st.error(f"Failed: {_err['e']}")
+            else:
+                asyncio.run(_place_async())
+
+        st.button(
+            "Place Tiny Order",
+            on_click=_place_sync,
+            disabled=(not confirmed) or (str(ex_saved.get("venue", "spot")) != "spot"),
+            type="primary",
+        )
 
     # Load configs
     llm_configs = load_llm_configs()
@@ -435,6 +534,15 @@ with trader_col:
         help="If > 0, overrides leverage from LLM",
     )
 
+    max_lev = st.number_input(
+        "Maximum Leverage (0 = unlimited)",
+        min_value=0,
+        max_value=125,
+        value=int(cur.get("max_leverage", 0) or 0),
+        step=1,
+        help="If > 0, caps leverage used for positions",
+    )
+
     # Stop Loss with trailing toggle
     sl_col1, sl_col2 = st.columns([1, 1])
     with sl_col1:
@@ -516,6 +624,7 @@ with trader_col:
             "confidence_threshold": float(conf),
             "default_position_size_usd": float(size),
             "default_leverage": int(lev) if int(lev) > 0 else None,
+            "max_leverage": int(max_lev) if int(max_lev) > 0 else 0,
             "tp_percent": float(tp_percent),
             "sl_percent": float(sl_percent),
             "trailing_sl_enabled": bool(trailing),

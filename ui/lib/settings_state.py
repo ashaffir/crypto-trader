@@ -22,6 +22,7 @@ def load_trader_settings(base_dir: Optional[str] = None) -> dict:
         "confidence_threshold": 0.8,
         "default_position_size_usd": 0.0,
         "default_leverage": None,
+        "max_leverage": 0,  # 0 means unlimited
         "tp_percent": 0.0,
         "sl_percent": 0.0,
         "trailing_sl_enabled": False,
@@ -396,6 +397,42 @@ def save_sidebar_settings(settings: dict, base_dir: Optional[str] = None) -> boo
     return _safe_write_json(path, merged)
 
 
+def load_consensus_settings(base_dir: Optional[str] = None) -> dict:
+    """Load consensus settings from runtime_config.json under key 'llm.consensus'.
+
+    Returns dict with defaults: {enabled: False, members: []}
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    llm = cfg.get("llm") if isinstance(cfg, dict) else None
+    cons = llm.get("consensus") if isinstance(llm, dict) else None
+    out: dict[str, object] = {"enabled": False, "members": []}
+    if isinstance(cons, dict):
+        out["enabled"] = bool(cons.get("enabled", False))
+        members = cons.get("members")
+        if isinstance(members, list):
+            out["members"] = [str(x) for x in members if isinstance(x, (str,))]
+    return out
+
+
+def save_consensus_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist consensus settings under llm.consensus (merge with existing LLM settings)."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    llm = dict((merged.get("llm") or {}))
+    current = load_consensus_settings(base_dir)
+    keep: dict[str, object] = dict(current)
+    if isinstance(settings, dict):
+        if "enabled" in settings:
+            keep["enabled"] = bool(settings.get("enabled"))
+        if isinstance(settings.get("members"), list):
+            keep["members"] = [str(x) for x in settings.get("members") if x]
+    llm["consensus"] = keep
+    merged["llm"] = llm
+    return _safe_write_json(path, merged)
+
+
 __all__ = [
     "load_backtesting_settings",
     "save_backtesting_settings",
@@ -414,6 +451,9 @@ __all__ = [
     # Sidebar helpers
     "load_sidebar_settings",
     "save_sidebar_settings",
+    # Consensus helpers
+    "load_consensus_settings",
+    "save_consensus_settings",
 ]
 
 # ---- Market mode (spot/futures) helpers ----

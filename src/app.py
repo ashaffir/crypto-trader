@@ -53,10 +53,14 @@ async def pipeline() -> None:
     engine = TradingEngine(position_store, TraderSettings(), broker)
 
     # ---- LLM Recommender State ----
-    llm_client: LLMClient | None = None
+    llm_client: LLMClient | None = None  # single-LLM mode
     llm_active_name: str | None = None
     llm_window_s: int = 30
     llm_refresh_s: int = 5
+    # Consensus state
+    consensus_enabled: bool = False
+    consensus_members: list[str] = []
+    consensus_clients: dict[str, LLMClient] = {}
 
     def _apply_llm_timing(overrides: Dict | None) -> None:
         nonlocal llm_window_s, llm_refresh_s
@@ -129,24 +133,112 @@ async def pipeline() -> None:
         except Exception as e:
             logger.warning(f"Failed to load llm_configs.json: {e}")
 
-    def _apply_llm_debug_setting() -> None:
-        """Enable/disable saving last LLM req/resp based on runtime overrides."""
-        nonlocal llm_client
-        if llm_client is None:
-            return
+    def _parse_consensus_overrides() -> tuple[bool, list[str]]:
         try:
             overrides = runtime_cfg.read() or {}
             llm_section = overrides.get("llm") if isinstance(overrides, dict) else None
-            if isinstance(llm_section, dict) and llm_section.get("debug_save_request"):
-                import os
+            cons = (
+                llm_section.get("consensus") if isinstance(llm_section, dict) else None
+            )
+            enabled = (
+                bool(cons.get("enabled", False)) if isinstance(cons, dict) else False
+            )
+            members = cons.get("members") if isinstance(cons, dict) else []
+            if not isinstance(members, list):
+                members = []
+            members = [str(x) for x in members if isinstance(x, (str,)) and x]
+            return enabled, members
+        except Exception:
+            return False, []
 
-                base_dir = runtime_cfg.paths.base_dir
-                os.makedirs(base_dir, exist_ok=True)
+    def _rebuild_consensus_clients_if_needed() -> None:
+        nonlocal consensus_enabled, consensus_members, consensus_clients
+        # Determine current desired consensus settings
+        desired_enabled, desired_members = _parse_consensus_overrides()
+        # Has llm_configs.json changed?
+        try:
+            changed_cfg, doc = runtime_cfg.load_llm_configs_if_changed()
+        except Exception:
+            changed_cfg, doc = (False, runtime_cfg.read_llm_configs())
+
+        # If nothing changed and settings same, keep
+        if (
+            not changed_cfg
+            and desired_enabled == consensus_enabled
+            and sorted(desired_members) == sorted(consensus_members)
+        ):
+            return
+
+        # Update enabled/members
+        consensus_enabled = desired_enabled
+        consensus_members = desired_members
+
+        # Close old clients
+        try:
+            import anyio
+
+            for c in consensus_clients.values():
+                try:
+                    anyio.from_thread.run(c.aclose)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        consensus_clients = {}
+
+        if not consensus_enabled or not consensus_members:
+            return
+
+        # Build new clients from llm_configs.json for selected members
+        try:
+            cfgs = (doc or {}).get("configs", []) if isinstance(doc, dict) else []
+            by_name: dict[str, dict] = {}
+            for cfg in cfgs:
+                if isinstance(cfg, dict) and isinstance(cfg.get("name"), str):
+                    by_name[cfg["name"]] = cfg
+            for name in consensus_members:
+                c = by_name.get(name)
+                if not isinstance(c, dict):
+                    continue
+                conf = LLMConfig(
+                    base_url=str(c.get("base_url") or ""),
+                    provider=(c.get("provider") or None),
+                    api_key=(c.get("api_key") or None),
+                    model=(c.get("model") or None),
+                    system_prompt=(c.get("system_prompt") or None),
+                    user_template=(c.get("user_template") or None),
+                )
+                consensus_clients[name] = LLMClient(conf)
+        except Exception:
+            consensus_clients = {}
+
+    def _apply_llm_debug_setting() -> None:
+        """Enable/disable saving last LLM req/resp based on runtime overrides."""
+        nonlocal llm_client, consensus_clients
+        try:
+            overrides = runtime_cfg.read() or {}
+            llm_section = overrides.get("llm") if isinstance(overrides, dict) else None
+            dbg_enabled = (
+                bool(llm_section.get("debug_save_request"))
+                if isinstance(llm_section, dict)
+                else False
+            )
+            import os
+
+            base_dir = runtime_cfg.paths.base_dir
+            os.makedirs(base_dir, exist_ok=True)
+            if llm_client is not None:
                 llm_client.set_debug_save_path(
                     os.path.join(base_dir, "llm_last_request.json")
+                    if dbg_enabled
+                    else None
                 )
-            else:
-                llm_client.set_debug_save_path(None)
+            # Apply to consensus clients as well (use per-client filenames to avoid collisions)
+            for name, client in consensus_clients.items():
+                safe = "llm_last_request" if not name else f"llm_last_request_{name}"
+                client.set_debug_save_path(
+                    os.path.join(base_dir, f"{safe}.json") if dbg_enabled else None
+                )
         except Exception:
             # Never crash the loop on debug setting updates
             pass
@@ -155,11 +247,17 @@ async def pipeline() -> None:
         nonlocal llm_client, llm_window_s, llm_refresh_s
         # Initialize from llm_configs.json before entering loop
         _rebuild_llm_client_from_llm_configs(initial=True)
+        _rebuild_consensus_clients_if_needed()
         while True:
             try:
-                # Rebuild client if llm_configs.json changed
+                # Rebuild client(s) if llm_configs.json or consensus changed
                 _rebuild_llm_client_from_llm_configs()
-                if llm_client is None:
+                _rebuild_consensus_clients_if_needed()
+                # If consensus is enabled and we have members, use consensus mode; else single-LLM mode
+                use_consensus = bool(
+                    consensus_enabled and consensus_members and consensus_clients
+                )
+                if not use_consensus and llm_client is None:
                     await asyncio.sleep(1)
                     continue
                 # Apply debug save toggle live from runtime_config.json
@@ -224,80 +322,190 @@ async def pipeline() -> None:
                         "window_seconds": llm_window_s,
                         "DATA_WINDOW": summaries,
                     }
-                    recs = await llm_client.generate(variables)
-                    if recs:
-                        for rec in recs:
-                            try:
-                                asset = str(rec.get("asset") or "").upper()
-                                # Fallback to first summary symbol if asset missing
-                                if not asset and summaries:
-                                    asset = str(
-                                        summaries[0].get("symbol") or ""
-                                    ).upper()
-                                if not asset:
+                    now_ms = int(__import__("time").time() * 1000)
+                    if use_consensus:
+                        # Fan out to all consensus members
+                        try:
+                            # Run requests concurrently
+                            tasks = [
+                                c.generate(variables)
+                                for c in consensus_clients.values()
+                            ]
+                            results = await asyncio.gather(
+                                *tasks, return_exceptions=True
+                            )
+                            member_names = list(consensus_clients.keys())
+                            # Build per-member per-symbol rec mapping
+                            per_member: dict[str, dict[str, dict[str, object]]] = {}
+                            for idx, res in enumerate(results):
+                                name = member_names[idx]
+                                per_member[name] = {}
+                                if isinstance(res, Exception) or res is None:
                                     continue
-                                direction_raw = str(rec.get("direction")).lower()
-                                direction = (
-                                    "buy"
-                                    if direction_raw in ("buy", "long")
-                                    else "sell"
-                                )
-                                leverage = int(rec.get("leverage") or 1)
-                                # Optional confidence from LLM (0..1)
-                                conf_val = rec.get("confidence")
-                                try:
-                                    confidence = (
-                                        float(conf_val)
-                                        if conf_val is not None
-                                        else None
-                                    )
-                                    if confidence is not None:
-                                        if confidence < 0.0 or confidence > 1.0:
-                                            confidence = None
-                                except Exception:
-                                    confidence = None
-                                now_ms = int(__import__("time").time() * 1000)
+                                for rec in res:
+                                    try:
+                                        asset = str(rec.get("asset") or "").upper()
+                                        if not asset:
+                                            continue
+                                        direction_raw = str(
+                                            rec.get("direction")
+                                        ).lower()
+                                        direction = (
+                                            "buy"
+                                            if direction_raw in ("buy", "long")
+                                            else "sell"
+                                        )
+                                        leverage = int(rec.get("leverage") or 1)
+                                        conf_val = rec.get("confidence")
+                                        conf = None
+                                        try:
+                                            conf = (
+                                                float(conf_val)
+                                                if conf_val is not None
+                                                else None
+                                            )
+                                            if conf is not None and (
+                                                conf < 0.0 or conf > 1.0
+                                            ):
+                                                conf = None
+                                        except Exception:
+                                            conf = None
+                                        per_member[name][asset] = {
+                                            "direction": direction,
+                                            "leverage": leverage,
+                                            "confidence": conf,
+                                        }
+                                    except Exception:
+                                        continue
+                            # Determine consensus per symbol
+                            for sym in current_symbols:
+                                sym_upper = str(sym).upper()
+                                # Gather member decisions
+                                dirs: list[str] = []
+                                confs: list[float] = []
+                                lev: int | None = None
+                                unanimous = True
+                                for name in consensus_members:
+                                    m = per_member.get(name, {}).get(sym_upper)
+                                    if not isinstance(m, dict):
+                                        unanimous = False
+                                        break
+                                    d = str(m.get("direction") or "")
+                                    c = m.get("confidence")
+                                    if d not in ("buy", "sell"):
+                                        unanimous = False
+                                        break
+                                    if not isinstance(c, (int, float)):
+                                        unanimous = False
+                                        break
+                                    if c < engine.settings.confidence_threshold:
+                                        unanimous = False
+                                        break
+                                    dirs.append(d)
+                                    confs.append(float(c))
+                                    if lev is None:
+                                        try:
+                                            lev = int(m.get("leverage") or 1)
+                                        except Exception:
+                                            lev = 1
+                                if not unanimous or not dirs:
+                                    # If a consensus-opened position exists, close on first break
+                                    # Prefer the specific summary for symbol if available
+                                    price_info = None
+                                    try:
+                                        price_info = next(
+                                            (
+                                                s
+                                                for s in summaries
+                                                if s.get("symbol") == sym_upper
+                                            ),
+                                            None,
+                                        )
+                                        if (
+                                            isinstance(price_info, dict)
+                                            and "last_mid" in price_info
+                                        ):
+                                            price_info = {
+                                                "mid": price_info.get("last_mid"),
+                                                "last_px": None,
+                                            }
+                                    except Exception:
+                                        price_info = None
+                                    try:
+                                        engine.maybe_close_on_consensus_break(
+                                            symbol=sym_upper,
+                                            ts_ms=now_ms,
+                                            price_info=price_info,
+                                        )
+                                    except Exception:
+                                        pass
+                                    continue
+                                # Ensure all directions equal
+                                if len(set(dirs)) != 1:
+                                    # Consensus broken -> close if needed
+                                    price_info = None
+                                    try:
+                                        price_info = next(
+                                            (
+                                                s
+                                                for s in summaries
+                                                if s.get("symbol") == sym_upper
+                                            ),
+                                            None,
+                                        )
+                                        if (
+                                            isinstance(price_info, dict)
+                                            and "last_mid" in price_info
+                                        ):
+                                            price_info = {
+                                                "mid": price_info.get("last_mid"),
+                                                "last_px": None,
+                                            }
+                                    except Exception:
+                                        price_info = None
+                                    try:
+                                        engine.maybe_close_on_consensus_break(
+                                            symbol=sym_upper,
+                                            ts_ms=now_ms,
+                                            price_info=price_info,
+                                        )
+                                    except Exception:
+                                        pass
+                                    continue
+                                # All good: open decision
+                                direction = dirs[0]
+                                leverage = int(lev or 1)
+                                consensus_conf = min(confs) if confs else None
+                                # Log consensus recommendation
                                 logbook.append_trade_recommendation(
                                     [
                                         {
                                             "ts_ms": now_ms,
-                                            "symbol": asset,
-                                            "asset": asset,
+                                            "symbol": sym_upper,
+                                            "asset": sym_upper,
                                             "direction": direction,
                                             "leverage": leverage,
-                                            # Persist model used for this recommendation
+                                            "llm_model": "consensus-llm",
                                             **(
-                                                {"llm_model": str(llm_client.cfg.model)}
-                                                if getattr(llm_client, "cfg", None)
-                                                and getattr(
-                                                    llm_client.cfg, "model", None
-                                                )
-                                                else {}
-                                            ),
-                                            **(
-                                                {"confidence": confidence}
-                                                if confidence is not None
+                                                {"confidence": consensus_conf}
+                                                if consensus_conf is not None
                                                 else {}
                                             ),
                                             "source": "llm",
                                         }
                                     ]
                                 )
-
-                                # ---- Decision Flow ----
-                                # 1) Close existing if inverse or TP/SL
+                                # price info for this symbol
                                 price_info = None
                                 try:
-                                    # Prefer the specific summary for symbol if available
                                     price_info = next(
                                         (
                                             s
                                             for s in summaries
-                                            if s.get("symbol") == asset
+                                            if s.get("symbol") == sym_upper
                                         ),
                                         None,
                                     )
-                                    # Map last_mid to mid for engine convenience
                                     if (
                                         isinstance(price_info, dict)
                                         and "last_mid" in price_info
@@ -308,29 +516,142 @@ async def pipeline() -> None:
                                         }
                                 except Exception:
                                     price_info = None
-
+                                # Close inverse or TP/SL
                                 engine.maybe_close_on_inverse_or_tp_sl(
-                                    symbol=asset,
+                                    symbol=sym_upper,
                                     recommendation_direction=direction,
-                                    confidence=confidence,
+                                    confidence=consensus_conf,
                                     ts_ms=now_ms,
                                     price_info=price_info,
                                 )
-
-                                # 2) If no open or slot available and confidence ok -> open
+                                # Try open
                                 engine.maybe_open_from_recommendation(
-                                    symbol=asset,
+                                    symbol=sym_upper,
                                     direction=direction,
                                     leverage=leverage,
-                                    confidence=confidence,
+                                    confidence=consensus_conf,
                                     ts_ms=now_ms,
                                     price_info=price_info,
-                                    llm_model=str(getattr(llm_client.cfg, "model", "")),
+                                    llm_model="consensus-llm",
                                     llm_window_s=llm_window_s,
                                 )
-                            except Exception:
-                                # Ignore malformed recs
-                                pass
+                        except Exception:
+                            # Do not break the loop on consensus errors
+                            pass
+                    else:
+                        # Single LLM mode
+                        recs = await llm_client.generate(variables)
+                        if recs:
+                            for rec in recs:
+                                try:
+                                    asset = str(rec.get("asset") or "").upper()
+                                    # Fallback to first summary symbol if asset missing
+                                    if not asset and summaries:
+                                        asset = str(
+                                            summaries[0].get("symbol") or ""
+                                        ).upper()
+                                    if not asset:
+                                        continue
+                                    direction_raw = str(rec.get("direction")).lower()
+                                    direction = (
+                                        "buy"
+                                        if direction_raw in ("buy", "long")
+                                        else "sell"
+                                    )
+                                    leverage = int(rec.get("leverage") or 1)
+                                    # Optional confidence from LLM (0..1)
+                                    conf_val = rec.get("confidence")
+                                    try:
+                                        confidence = (
+                                            float(conf_val)
+                                            if conf_val is not None
+                                            else None
+                                        )
+                                        if confidence is not None:
+                                            if confidence < 0.0 or confidence > 1.0:
+                                                confidence = None
+                                    except Exception:
+                                        confidence = None
+                                    logbook.append_trade_recommendation(
+                                        [
+                                            {
+                                                "ts_ms": now_ms,
+                                                "symbol": asset,
+                                                "asset": asset,
+                                                "direction": direction,
+                                                "leverage": leverage,
+                                                # Persist model used for this recommendation
+                                                **(
+                                                    {
+                                                        "llm_model": str(
+                                                            llm_client.cfg.model
+                                                        )
+                                                    }
+                                                    if getattr(llm_client, "cfg", None)
+                                                    and getattr(
+                                                        llm_client.cfg, "model", None
+                                                    )
+                                                    else {}
+                                                ),
+                                                **(
+                                                    {"confidence": confidence}
+                                                    if confidence is not None
+                                                    else {}
+                                                ),
+                                                "source": "llm",
+                                            }
+                                        ]
+                                    )
+
+                                    # ---- Decision Flow ----
+                                    # 1) Close existing if inverse or TP/SL
+                                    price_info = None
+                                    try:
+                                        # Prefer the specific summary for symbol if available
+                                        price_info = next(
+                                            (
+                                                s
+                                                for s in summaries
+                                                if s.get("symbol") == asset
+                                            ),
+                                            None,
+                                        )
+                                        # Map last_mid to mid for engine convenience
+                                        if (
+                                            isinstance(price_info, dict)
+                                            and "last_mid" in price_info
+                                        ):
+                                            price_info = {
+                                                "mid": price_info.get("last_mid"),
+                                                "last_px": None,
+                                            }
+                                    except Exception:
+                                        price_info = None
+
+                                    engine.maybe_close_on_inverse_or_tp_sl(
+                                        symbol=asset,
+                                        recommendation_direction=direction,
+                                        confidence=confidence,
+                                        ts_ms=now_ms,
+                                        price_info=price_info,
+                                    )
+
+                                    # 2) If no open or slot available and confidence ok -> open
+                                    engine.maybe_open_from_recommendation(
+                                        symbol=asset,
+                                        direction=direction,
+                                        leverage=leverage,
+                                        confidence=confidence,
+                                        ts_ms=now_ms,
+                                        price_info=price_info,
+                                        llm_model=str(
+                                            getattr(llm_client.cfg, "model", "")
+                                        ),
+                                        llm_window_s=llm_window_s,
+                                    )
+                                except Exception:
+                                    # Ignore malformed recs
+                                    pass
             except Exception as e:
                 logger.warning(f"LLM loop error: {e}")
             finally:

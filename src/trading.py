@@ -16,6 +16,7 @@ class TraderSettings:
     confidence_threshold: float = 0.8
     default_position_size_usd: float = 0.0
     default_leverage: Optional[int] = None
+    max_leverage: int = 0  # 0 means unlimited
     tp_percent: float = 0.0  # e.g., 1.0 -> +1%
     sl_percent: float = 0.0  # e.g., 0.5 -> -0.5%
     trailing_sl_enabled: bool = False
@@ -45,6 +46,12 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
             )
         if "default_leverage" in tr and tr.get("default_leverage") not in (None, ""):
             out.default_leverage = int(tr.get("default_leverage"))
+        if "max_leverage" in tr and tr.get("max_leverage") not in (None, ""):
+            try:
+                ml = int(tr.get("max_leverage"))
+                out.max_leverage = max(0, ml)
+            except Exception:
+                pass
         if "tp_percent" in tr:
             out.tp_percent = float(tr.get("tp_percent", 0.0))
         if "sl_percent" in tr:
@@ -117,6 +124,15 @@ class TradingEngine:
             if self.settings.default_leverage
             else leverage
         )
+        # Enforce maximum leverage if configured
+        try:
+            if (
+                isinstance(self.settings.max_leverage, int)
+                and self.settings.max_leverage > 0
+            ):
+                lev = min(int(lev or 1), int(self.settings.max_leverage))
+        except Exception:
+            pass
 
         entry_px = None
         if isinstance(price_info, dict):
@@ -270,6 +286,41 @@ class TradingEngine:
                 return int(pos["id"])
 
         return None
+
+    def maybe_close_on_consensus_break(
+        self,
+        *,
+        symbol: str,
+        ts_ms: int,
+        price_info: Dict[str, Any] | None,
+    ) -> Optional[int]:
+        """Close position immediately if it was opened under consensus-llm and consensus broke.
+
+        Returns closed position id or None.
+        """
+        pos = self.store.get_latest_open_for_symbol(symbol)
+        if not pos:
+            return None
+        try:
+            if str(pos.get("llm_model") or "") != "consensus-llm":
+                return None
+        except Exception:
+            return None
+
+        exit_px = None
+        if isinstance(price_info, dict):
+            last_px = price_info.get("last_px")
+            mid = price_info.get("mid")
+            exit_px = last_px if last_px is not None else mid
+
+        # Close with fees if configured
+        self._close_with_fees(
+            pos,
+            ts_ms,
+            float(exit_px) if exit_px is not None else None,
+            close_reason="NoConsensus",
+        )
+        return int(pos["id"])
 
     def _close_with_fees(
         self,
