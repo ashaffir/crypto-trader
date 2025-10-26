@@ -22,6 +22,81 @@ from ui.lib.settings_state import (
 
 st.set_page_config(page_title="Home", layout="wide")
 
+# --- Account Balances ---
+try:
+    from ui.lib.common import render_status_badge
+
+    render_status_badge(st)
+
+    try:
+        from streamlit_autorefresh import st_autorefresh as _st_autorefresh  # type: ignore
+    except Exception:  # pragma: no cover
+        _st_autorefresh = None
+
+    # Auto-refresh every N seconds based on config.ui.auto_refresh_seconds (fallback 10s)
+    try:
+        from src.config import load_app_config
+
+        _cfg = load_app_config()
+        _rs = int(getattr(_cfg.ui, "auto_refresh_seconds", 10))
+    except Exception:
+        _rs = 10
+
+    if _st_autorefresh is not None and _rs > 0:
+        _st_autorefresh(interval=_rs * 1000, key="home_balance_auto_refresh")
+        st.caption(f"Auto-refresh every {_rs}s")
+
+    st.subheader("Account Balances")
+    st.caption("Shows Binance balances using keys saved in Settings (execution mode).")
+
+    import asyncio
+    from src.utils.binance_account import fetch_balances_from_runtime_config
+
+    async def _load():
+        return await fetch_balances_from_runtime_config()
+
+    data = asyncio.run(_load())
+
+    if not isinstance(data, dict) or not data.get("ok"):
+        err = data.get("error") if isinstance(data, dict) else "unknown"
+        if err == "missing_credentials":
+            st.info("Add API key/secret in Settings → Execution to view live balances.")
+        else:
+            st.warning(f"Unable to load balances: {err}")
+    else:
+        venue = str(data.get("venue") or "spot").lower()
+        network = str(data.get("network") or "mainnet").lower()
+        bals = data.get("balances", [])
+        # Show top non-zero first
+        non_zero = [
+            b
+            for b in bals
+            if float(b.get("total", 0)) > 0
+            or float(b.get("available", 0)) > 0
+            or float(b.get("locked", 0)) > 0
+        ]
+        zeros = [b for b in bals if b not in non_zero]
+        ordered = non_zero + zeros
+
+        st.caption(f"Venue: {venue.upper()} · Network: {network.upper()}")
+        import pandas as _pd
+
+        if ordered:
+            df = _pd.DataFrame(ordered)
+            # Column order
+            cols = [
+                c for c in ["asset", "available", "locked", "total"] if c in df.columns
+            ]
+            df = df[cols]
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No assets found.")
+except Exception as e:  # pragma: no cover
+    st.warning(f"Balances widget unavailable: {e}")
+
+# Spacer
+st.write("")
+
 # Minimal controls panel with only the Bot Running toggle
 st.subheader("Controls")
 

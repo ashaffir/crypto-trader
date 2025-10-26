@@ -174,118 +174,135 @@ class TradingEngine:
         ts_ms: int,
         price_info: Dict[str, Any] | None,
     ) -> Optional[int]:
-        """Close existing position if inverse rec above threshold or TP/SL triggers.
+        """Evaluate all open positions for this symbol and close as needed.
 
-        Returns closed position id or None.
+        Applies: auto-expire, trailing best-favorable maintenance, TP/SL, and inverse.
+        Returns the last closed position id (if any), else None.
         """
-        pos = self.store.get_latest_open_for_symbol(symbol)
-        if not pos:
+        opens = self.store.get_open_positions(symbol)
+        if not opens:
             return None
 
-        # TP/SL evaluation
-        exit_px = None
+        # Determine a single exit price snapshot for this evaluation tick
+        exit_px: Optional[float] = None
         if isinstance(price_info, dict):
             last_px = price_info.get("last_px")
             mid = price_info.get("mid")
             exit_px = last_px if last_px is not None else mid
 
-        # Auto-expire stale position
+        last_closed: Optional[int] = None
+
+        # Auto-expire window (minutes) if configured
+        expire_min = None
         try:
             expire_min = self.settings.auto_expire_minutes
-            if expire_min and expire_min > 0:
-                opened = (
-                    int(pos.get("opened_ts_ms"))
-                    if pos.get("opened_ts_ms") is not None
-                    else None
-                )
-                if opened is not None:
-                    max_age_ms = int(expire_min) * 60_000
-                    if int(ts_ms) - opened >= max_age_ms:
-                        self.broker.close_position(
-                            position_id=int(pos["id"]),
-                            symbol=symbol,
-                            exit_px=exit_px,
-                            ts_ms=int(ts_ms),
-                            pnl=None,
-                            reason="Stale",
-                        )
-                        return int(pos["id"])  # closed by Stale
         except Exception:
-            # Do not block other closures if expiry computation fails
-            pass
+            expire_min = None
 
-        if exit_px is not None and pos.get("entry_px") is not None:
-            change_pct = 0.0
+        for pos in list(opens):
+            # 1) Auto-expire stale position
             try:
-                direction = str(pos.get("direction"))
-                entry_px = float(pos.get("entry_px"))
-                change = (float(exit_px) - entry_px) / entry_px * 100.0
-                change_pct = change if direction == "long" else -change
+                if expire_min and expire_min > 0:
+                    opened = (
+                        int(pos.get("opened_ts_ms"))
+                        if pos.get("opened_ts_ms") is not None
+                        else None
+                    )
+                    if opened is not None:
+                        max_age_ms = int(expire_min) * 60_000
+                        if int(ts_ms) - opened >= max_age_ms:
+                            self.broker.close_position(
+                                position_id=int(pos["id"]),
+                                symbol=symbol,
+                                exit_px=exit_px,
+                                ts_ms=int(ts_ms),
+                                pnl=None,
+                                reason="Stale",
+                            )
+                            last_closed = int(pos["id"])  # continue to evaluate others
+                            continue
             except Exception:
-                change_pct = 0.0
+                # Do not block other closures if expiry computation fails
+                pass
 
-            # Maintain trailing best-favorable price if trailing is enabled
+            # 2) Maintain trailing best-favorable if enabled and we have a price
             try:
-                if self.settings.trailing_sl_enabled:
+                if exit_px is not None and self.settings.trailing_sl_enabled:
                     self.store.update_best_favorable(int(pos["id"]), float(exit_px))
             except Exception:
                 pass
 
-            # TP
-            if (
-                not self.settings.tp_disabled
-                and self.settings.tp_percent > 0
-                and change_pct >= self.settings.tp_percent
-            ):
-                self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="TP")
-                return int(pos["id"])  # closed by TP
+            # 3) TP/SL evaluation (requires entry and a price)
+            if exit_px is not None and pos.get("entry_px") is not None:
+                change_pct = 0.0
+                try:
+                    direction = str(pos.get("direction"))
+                    entry_px = float(pos.get("entry_px"))
+                    change = (float(exit_px) - entry_px) / entry_px * 100.0
+                    change_pct = change if direction == "long" else -change
+                except Exception:
+                    change_pct = 0.0
 
-            # SL (no trailing implementation stateful here; trailing requires tracking max_favorable)
-            sl_trigger = False
-            if self.settings.sl_percent > 0:
-                if not self.settings.trailing_sl_enabled:
-                    sl_trigger = change_pct <= -self.settings.sl_percent
-                else:
-                    try:
-                        # Compute drawdown from best favorable
-                        best = pos.get("best_favorable_px")
-                        direction = str(pos.get("direction"))
-                        if best is not None:
-                            if direction == "long":
-                                drawdown_pct = (
-                                    (float(exit_px) - float(best)) / float(best) * 100.0
-                                )
-                            else:
-                                drawdown_pct = (
-                                    (float(best) - float(exit_px)) / float(best) * 100.0
-                                )
-                            sl_trigger = drawdown_pct <= -self.settings.sl_percent
-                    except Exception:
-                        sl_trigger = False
-            if sl_trigger:
-                self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="SL")
-                return int(pos["id"])  # closed by SL
+                # TP
+                if (
+                    not self.settings.tp_disabled
+                    and self.settings.tp_percent > 0
+                    and change_pct >= self.settings.tp_percent
+                ):
+                    self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="TP")
+                    last_closed = int(pos["id"])  # continue to evaluate others
+                    continue
 
-        # Inverse recommendation close (slots not relevant for close)
-        if recommendation_direction and confidence is not None:
-            inv = (
-                recommendation_direction.lower() in ("buy", "long")
-                and pos.get("direction") == "short"
-                or (
-                    recommendation_direction.lower() in ("sell", "short")
-                    and pos.get("direction") == "long"
+                # SL (supports trailing via best_favorable)
+                sl_trigger = False
+                if self.settings.sl_percent > 0:
+                    if not self.settings.trailing_sl_enabled:
+                        sl_trigger = change_pct <= -self.settings.sl_percent
+                    else:
+                        try:
+                            best = pos.get("best_favorable_px")
+                            direction = str(pos.get("direction"))
+                            if best is not None:
+                                if direction == "long":
+                                    drawdown_pct = (
+                                        (float(exit_px) - float(best))
+                                        / float(best)
+                                        * 100.0
+                                    )
+                                else:
+                                    drawdown_pct = (
+                                        (float(best) - float(exit_px))
+                                        / float(best)
+                                        * 100.0
+                                    )
+                                sl_trigger = drawdown_pct <= -self.settings.sl_percent
+                        except Exception:
+                            sl_trigger = False
+                if sl_trigger:
+                    self._close_with_fees(pos, ts_ms, float(exit_px), close_reason="SL")
+                    last_closed = int(pos["id"])  # continue to evaluate others
+                    continue
+
+            # 4) Inverse recommendation close (slots not relevant for close)
+            if recommendation_direction and confidence is not None:
+                inv = (
+                    recommendation_direction.lower() in ("buy", "long")
+                    and pos.get("direction") == "short"
+                    or (
+                        recommendation_direction.lower() in ("sell", "short")
+                        and pos.get("direction") == "long"
+                    )
                 )
-            )
-            if inv and confidence >= self.settings.confidence_threshold:
-                self._close_with_fees(
-                    pos,
-                    ts_ms,
-                    float(exit_px) if exit_px is not None else None,
-                    close_reason="Inverse",
-                )
-                return int(pos["id"])
+                if inv and confidence >= self.settings.confidence_threshold:
+                    self._close_with_fees(
+                        pos,
+                        ts_ms,
+                        float(exit_px) if exit_px is not None else None,
+                        close_reason="Inverse",
+                    )
+                    last_closed = int(pos["id"])  # continue to evaluate others
 
-        return None
+        return last_closed
 
     def maybe_close_on_consensus_break(
         self,

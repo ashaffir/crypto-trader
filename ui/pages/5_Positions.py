@@ -200,6 +200,50 @@ else:
     if total_pnl is not None:
         st.caption(f"Total PnL (all rows): {total_pnl:.2f}")
 
+    # Latest-N Total PnL control
+    try:
+        max_rows = max(1, len(df))
+        default_n = min(100, max_rows)
+        n_latest = st.number_input(
+            "Total PnL window (latest N rows)",
+            min_value=1,
+            max_value=max_rows,
+            value=int(default_n),
+            step=1,
+            key="positions_total_pnl_latest_n",
+            help="Sum PnL over the most recent N rows by table order (newest first).",
+        )
+
+        # Use visible table ordering: id DESC (matches SELECT ORDER BY id DESC)
+        if "id" in df.columns:
+            latest_df = df.sort_values("id", ascending=False).head(int(n_latest))
+        else:
+            # Fallback to timestamp if id missing
+            sort_series = None
+            if "closed_ts_ms" in df.columns and "opened_ts_ms" in df.columns:
+                sort_series = (
+                    df["closed_ts_ms"].fillna(df["opened_ts_ms"]).astype("Int64")
+                )
+            elif "opened_ts_ms" in df.columns:
+                sort_series = df["opened_ts_ms"].astype("Int64")
+            latest_df = (
+                df.assign(_sort=sort_series)
+                .sort_values("_sort", ascending=False)
+                .head(int(n_latest))
+                if sort_series is not None
+                else df.head(int(n_latest))
+            )
+
+        try:
+            latest_total_pnl = pd.to_numeric(latest_df["pnl"], errors="coerce").sum()
+            st.caption(
+                f"Total PnL (latest {int(n_latest)} rows): {latest_total_pnl:.2f}"
+            )
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     # Download full dataset
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
