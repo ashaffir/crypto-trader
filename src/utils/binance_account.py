@@ -5,6 +5,7 @@ import hmac
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from loguru import logger
 
 import httpx
 
@@ -173,6 +174,7 @@ async def fetch_balances_from_runtime_config() -> Dict[str, Any]:
             info = await fetch_futures_account_info(
                 api_key=api_key, api_secret=api_secret, network=network
             )
+            logger.info(f"Fetched futures account info: {info}")
             assets = info.get("assets", []) if isinstance(info, dict) else []
             normalized = []
             for a in assets:
@@ -190,6 +192,7 @@ async def fetch_balances_from_runtime_config() -> Dict[str, Any]:
             info = await fetch_spot_account_info(
                 api_key=api_key, api_secret=api_secret, network=network
             )
+            logger.info(f"Fetched spot account info: {info}")
             bals = info.get("balances", []) if isinstance(info, dict) else []
             normalized = []
             for b in bals:
