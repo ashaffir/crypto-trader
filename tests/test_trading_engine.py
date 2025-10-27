@@ -66,13 +66,41 @@ def test_inverse_close(tmp_path):
         llm_model="x",
     )
     assert pid is not None and store.count_open() == 1
-    # Inverse rec with enough confidence -> close
+    # Inverse rec should close regardless of confidence
     closed = eng.maybe_close_on_inverse_or_tp_sl(
         symbol="BTCUSDT",
         recommendation_direction="sell",
-        confidence=0.9,
+        confidence=0.1,  # below threshold, should still close
         ts_ms=ts + 1000,
         price_info={"mid": 99.0, "last_px": 99.0},
+    )
+    assert isinstance(closed, int)
+
+
+def test_inverse_close_without_confidence(tmp_path):
+    store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
+    eng = TradingEngine(
+        store, TraderSettings(concurrent_positions=2, confidence_threshold=0.95)
+    )
+    ts = 1_700_000_000_000
+    # Open short
+    pid = eng.maybe_open_from_recommendation(
+        symbol="ETHUSDT",
+        direction="sell",
+        leverage=3,
+        confidence=0.99,
+        ts_ms=ts,
+        price_info={"mid": 200.0, "last_px": 200.0},
+        llm_model="x",
+    )
+    assert pid is not None and store.count_open() == 1
+    # Opposite rec with confidence None should still close
+    closed = eng.maybe_close_on_inverse_or_tp_sl(
+        symbol="ETHUSDT",
+        recommendation_direction="buy",
+        confidence=None,
+        ts_ms=ts + 1000,
+        price_info={"mid": 201.0, "last_px": 201.0},
     )
     assert isinstance(closed, int)
 

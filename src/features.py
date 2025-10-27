@@ -188,24 +188,73 @@ class FeatureEngine:
         rows = self.get_recent_window(symbol, window_s)
         if not rows:
             return {"symbol": symbol, "count": 0}
+
+        # Extract series
+        ts_list = [r.get("ts_ms") for r in rows if r.get("ts_ms") is not None]
         mids = [r.get("mid") for r in rows if r.get("mid") is not None]
         spreads = [r.get("spread_bps") for r in rows if r.get("spread_bps") is not None]
         imbs = [
             r.get("ob_imbalance") for r in rows if r.get("ob_imbalance") is not None
         ]
         vols = [r.get("last_qty") for r in rows if r.get("last_qty") is not None]
+
+        def _mean(vals: List[float]) -> Optional[float]:
+            return sum(vals) / len(vals) if vals else None
+
+        def _std(vals: List[float]) -> Optional[float]:
+            if not vals or len(vals) < 2:
+                return None
+            m = sum(vals) / len(vals)
+            var = sum((v - m) * (v - m) for v in vals) / (len(vals) - 1)
+            return var**0.5
+
+        def _slope_over_time(values: List[float], ts_ms: List[int]) -> Optional[float]:
+            if not values or not ts_ms or len(values) < 2 or len(ts_ms) < 2:
+                return None
+            # Align lengths conservatively using the last N where both exist
+            n = min(len(values), len(ts_ms))
+            y = values[-n:]
+            t = ts_ms[-n:]
+            t0 = t[0]
+            t1 = t[-1]
+            dt_s = (t1 - t0) / 1000.0 if t1 is not None and t0 is not None else 0.0
+            if dt_s <= 0:
+                return 0.0
+            return (y[-1] - y[0]) / dt_s
+
+        def _spike_score(vals: List[float]) -> Optional[float]:
+            if not vals:
+                return None
+            m = _mean(vals)
+            s = _std(vals)
+            if m is None or s is None or s == 0:
+                return 0.0
+            return (max(vals) - m) / s
+
+        mid_stats = {
+            "mean": _mean(mids),
+            "min": min(mids) if mids else None,
+            "max": max(mids) if mids else None,
+            "slope": _slope_over_time(mids, ts_list),
+        }
+        spread_stats = {
+            "mean": _mean(spreads),
+            "std": _std(spreads),
+        }
+        imb_stats = {
+            "mean": _mean(imbs),
+            "trend": _slope_over_time(imbs, ts_list),
+        }
+        vol_stats = {
+            "sum": sum(vols) if vols else 0.0,
+            "spike_score": _spike_score(vols),
+        }
+
         return {
             "symbol": symbol,
             "count": len(rows),
-            "t0_ms": rows[0].get("ts_ms"),
-            "t1_ms": rows[-1].get("ts_ms"),
-            "last_mid": rows[-1].get("mid"),
-            "last_spread_bps": rows[-1].get("spread_bps"),
-            "last_ob_imbalance": rows[-1].get("ob_imbalance"),
-            "series": {
-                "mid": [m for m in mids],
-                "spread_bps": [s for s in spreads],
-                "ob_imbalance": [i for i in imbs],
-                "last_qty": [v for v in vols],
-            },
+            "mid": mid_stats,
+            "spread_bps": spread_stats,
+            "ob_imbalance": imb_stats,
+            "volume": vol_stats,
         }

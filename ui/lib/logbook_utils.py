@@ -124,7 +124,42 @@ def _concat_non_empty(frames: list[pd.DataFrame]) -> pd.DataFrame:
             continue
     if not valid:
         return pd.DataFrame()
-    return pd.concat(valid, ignore_index=True, sort=False)
+    # Normalize columns to avoid FutureWarning by dropping per-frame all-NA columns
+    # and excluding columns that are all-NA across all frames.
+    try:
+        # Columns that have at least one non-NA value in any frame
+        non_na_cols: set[str] = set()
+        for df in valid:
+            cols_with_data = df.columns[df.notna().any(axis=0)]
+            non_na_cols.update(list(cols_with_data))
+
+        if not non_na_cols:
+            return pd.DataFrame()
+
+        filtered: list[pd.DataFrame] = []
+        for df in valid:
+            # Keep only columns that appear with data in any frame AND are non-NA in this df
+            df_cols_with_data = set(df.columns[df.notna().any(axis=0)])
+            keep_cols = [
+                c for c in df.columns if c in non_na_cols and c in df_cols_with_data
+            ]
+            if not keep_cols:
+                continue
+            sub = df.loc[:, keep_cols]
+            # Remove rows that are entirely NA after column filtering
+            sub = sub.dropna(how="all")
+            if sub.empty:
+                continue
+            filtered.append(sub)
+
+        if not filtered:
+            return pd.DataFrame()
+    except Exception:
+        filtered = valid
+
+    if len(filtered) == 1:
+        return filtered[0].reset_index(drop=True)
+    return pd.concat(filtered, ignore_index=True, sort=False)
 
 
 def list_symbols_with_data(table: str) -> list[str]:

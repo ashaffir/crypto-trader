@@ -97,165 +97,7 @@ with llm_col:
         else:
             st.error("Failed to save window size")
 
-    st.markdown("---")
-
-    st.markdown("**Market Mode**")
-    cur_market = load_market_mode()
-    new_market = st.radio(
-        "Select Market",
-        options=["spot", "futures"],
-        index=(0 if cur_market == "spot" else 1),
-        horizontal=True,
-        help="Choose which market to collect from and simulate fees for",
-    )
-    if new_market != cur_market:
-        if save_market_mode(new_market):
-            # Keep fee schedule and execution venue in sync with Market Mode
-            try:
-                # Update fee market (new value should override existing)
-                fees_cur = load_trader_fee_settings()
-                _ = save_trader_fee_settings({**fees_cur, "market": str(new_market)})
-            except Exception:
-                pass
-            try:
-                # Update execution venue
-                ex_cur = load_execution_settings()
-                _ = save_execution_settings({**ex_cur, "venue": str(new_market)})
-            except Exception:
-                pass
-            st.success(
-                f"✓ Market set to {new_market}. Collector, fees, and venue synced."
-            )
-            # Refresh to reflect updated fee market immediately
-            st.rerun()
-        else:
-            st.error("Failed to save market mode")
-
-    st.markdown("---")
-    st.markdown("**Execution Mode**")
-    exec_cur = load_execution_settings()
-    exec_mode = st.selectbox(
-        "Mode",
-        options=["paper", "live"],
-        index=(0 if exec_cur.get("mode") == "paper" else 1),
-        help="Paper = no real orders. Live = send orders (requires keys).",
-    )
-    st.caption(f"Venue: derived from Market Mode → {cur_market}")
-    exec_network = st.selectbox(
-        "Network",
-        options=["testnet", "mainnet"],
-        index=(0 if exec_cur.get("network") == "testnet" else 1),
-        help="Use testnet for safe testing.",
-    )
-    api_key = st.text_input("API Key", value=str(exec_cur.get("api_key") or ""))
-    api_secret = st.text_input(
-        "API Secret", value=str(exec_cur.get("api_secret") or ""), type="password"
-    )
-    if st.button("Save Execution Settings"):
-        ok = save_execution_settings(
-            {
-                "mode": exec_mode,
-                "venue": str(cur_market),  # derived from Market Mode
-                "network": exec_network,
-                "api_key": api_key.strip() or None,
-                "api_secret": api_secret.strip() or None,
-            }
-        )
-        if ok:
-            st.success("✓ Execution settings saved")
-        else:
-            st.error("Failed to save execution settings")
-
-    # ---- Tiny Order Test (Spot) ----
-    st.markdown("")
-    with st.expander("Tiny Order Test (Spot)"):
-        st.caption(
-            "Places a MARKET order using the saved Execution Settings. Uses quote amount (e.g., USDT)."
-        )
-        ex_saved = _tiny_load_exec()
-        net_text = str(ex_saved.get("network", "testnet"))
-        mode_text = str(ex_saved.get("mode", "paper"))
-        st.write(
-            f"Saved mode: `{mode_text}` · network: `{net_text}` · venue: `{ex_saved.get('venue', 'spot')}`"
-        )
-
-        default_symbol = (load_tracked_symbols() or ["BTCUSDT"])[0]
-        to_symbol = st.text_input("Symbol", value=default_symbol, key="tiny_symbol")
-        to_side = st.radio(
-            "Side", options=["BUY", "SELL"], horizontal=True, key="tiny_side"
-        )
-        to_amount = st.number_input(
-            "Quote Amount",
-            min_value=0.0,
-            value=5.0,
-            step=0.1,
-            help="Amount in quote currency (e.g., USDT)",
-            key="tiny_amount",
-        )
-
-        # Extra confirmation for mainnet
-        confirm_label = (
-            "I understand this places a REAL order on MAINNET"
-            if net_text == "mainnet"
-            else "Confirm"
-        )
-        confirmed = st.checkbox(confirm_label, value=False, key="tiny_confirm")
-
-        async def _place_async() -> None:
-            ex = _tiny_load_exec()
-            err = _tiny_validate_exec(ex)
-            if err:
-                st.error(err)
-                return
-            try:
-                res = await _tiny_place_order(
-                    symbol=str(to_symbol).strip().upper(),
-                    side=str(to_side).upper(),
-                    quote_qty=float(to_amount),
-                    ex=ex,
-                )
-                st.success("✓ Order accepted")
-                st.json(res)
-            except httpx.HTTPStatusError as e:  # Show Binance error body clearly
-                try:
-                    st.error(f"HTTP {e.response.status_code}")
-                    st.json(e.response.json())
-                except Exception:
-                    st.error(f"HTTP {e.response.status_code}: {e.response.text}")
-            except Exception as e:  # noqa: BLE001
-                st.error(f"Failed: {e}")
-
-        def _place_sync() -> None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                import threading
-
-                _err = {"e": None}
-
-                def _runner():
-                    try:
-                        asyncio.run(_place_async())
-                    except Exception as e:  # noqa: BLE001
-                        _err["e"] = e
-
-                t = threading.Thread(target=_runner, daemon=True)
-                t.start()
-                t.join()
-                if _err["e"] is not None:
-                    st.error(f"Failed: {_err['e']}")
-            else:
-                asyncio.run(_place_async())
-
-        st.button(
-            "Place Tiny Order",
-            on_click=_place_sync,
-            disabled=(not confirmed) or (str(ex_saved.get("venue", "spot")) != "spot"),
-            type="primary",
-        )
-
+    # ---- LLM selection and debug options (moved under Data Window) ----
     # Load configs
     llm_configs = load_llm_configs()
     config_names = [cfg.get("name", "") for cfg in llm_configs if cfg.get("name")]
@@ -478,6 +320,165 @@ with llm_col:
             st.success("✓ Debug setting saved")
         else:
             st.error("Failed to save debug setting")
+
+    st.markdown("---")
+
+    st.markdown("**Market Mode**")
+    cur_market = load_market_mode()
+    new_market = st.radio(
+        "Select Market",
+        options=["spot", "futures"],
+        index=(0 if cur_market == "spot" else 1),
+        horizontal=True,
+        help="Choose which market to collect from and simulate fees for",
+    )
+    if new_market != cur_market:
+        if save_market_mode(new_market):
+            # Keep fee schedule and execution venue in sync with Market Mode
+            try:
+                # Update fee market (new value should override existing)
+                fees_cur = load_trader_fee_settings()
+                _ = save_trader_fee_settings({**fees_cur, "market": str(new_market)})
+            except Exception:
+                pass
+            try:
+                # Update execution venue
+                ex_cur = load_execution_settings()
+                _ = save_execution_settings({**ex_cur, "venue": str(new_market)})
+            except Exception:
+                pass
+            st.success(
+                f"✓ Market set to {new_market}. Collector, fees, and venue synced."
+            )
+            # Refresh to reflect updated fee market immediately
+            st.rerun()
+        else:
+            st.error("Failed to save market mode")
+
+    st.markdown("---")
+    st.markdown("**Execution Mode**")
+    exec_cur = load_execution_settings()
+    exec_mode = st.selectbox(
+        "Mode",
+        options=["paper", "live"],
+        index=(0 if exec_cur.get("mode") == "paper" else 1),
+        help="Paper = no real orders. Live = send orders (requires keys).",
+    )
+    st.caption(f"Venue: derived from Market Mode → {cur_market}")
+    exec_network = st.selectbox(
+        "Network",
+        options=["testnet", "mainnet"],
+        index=(0 if exec_cur.get("network") == "testnet" else 1),
+        help="Use testnet for safe testing.",
+    )
+    api_key = st.text_input("API Key", value=str(exec_cur.get("api_key") or ""))
+    api_secret = st.text_input(
+        "API Secret", value=str(exec_cur.get("api_secret") or ""), type="password"
+    )
+    if st.button("Save Execution Settings"):
+        ok = save_execution_settings(
+            {
+                "mode": exec_mode,
+                "venue": str(cur_market),  # derived from Market Mode
+                "network": exec_network,
+                "api_key": api_key.strip() or None,
+                "api_secret": api_secret.strip() or None,
+            }
+        )
+        if ok:
+            st.success("✓ Execution settings saved")
+        else:
+            st.error("Failed to save execution settings")
+
+    # ---- Tiny Order Test (Spot) ----
+    st.markdown("")
+    with st.expander("Tiny Order Test (Spot)"):
+        st.caption(
+            "Places a MARKET order using the saved Execution Settings. Uses quote amount (e.g., USDT)."
+        )
+        ex_saved = _tiny_load_exec()
+        net_text = str(ex_saved.get("network", "testnet"))
+        mode_text = str(ex_saved.get("mode", "paper"))
+        st.write(
+            f"Saved mode: `{mode_text}` · network: `{net_text}` · venue: `{ex_saved.get('venue', 'spot')}`"
+        )
+
+        default_symbol = (load_tracked_symbols() or ["BTCUSDT"])[0]
+        to_symbol = st.text_input("Symbol", value=default_symbol, key="tiny_symbol")
+        to_side = st.radio(
+            "Side", options=["BUY", "SELL"], horizontal=True, key="tiny_side"
+        )
+        to_amount = st.number_input(
+            "Quote Amount",
+            min_value=0.0,
+            value=5.0,
+            step=0.1,
+            help="Amount in quote currency (e.g., USDT)",
+            key="tiny_amount",
+        )
+
+        # Extra confirmation for mainnet
+        confirm_label = (
+            "I understand this places a REAL order on MAINNET"
+            if net_text == "mainnet"
+            else "Confirm"
+        )
+        confirmed = st.checkbox(confirm_label, value=False, key="tiny_confirm")
+
+        async def _place_async() -> None:
+            ex = _tiny_load_exec()
+            err = _tiny_validate_exec(ex)
+            if err:
+                st.error(err)
+                return
+            try:
+                res = await _tiny_place_order(
+                    symbol=str(to_symbol).strip().upper(),
+                    side=str(to_side).upper(),
+                    quote_qty=float(to_amount),
+                    ex=ex,
+                )
+                st.success("✓ Order accepted")
+                st.json(res)
+            except httpx.HTTPStatusError as e:  # Show Binance error body clearly
+                try:
+                    st.error(f"HTTP {e.response.status_code}")
+                    st.json(e.response.json())
+                except Exception:
+                    st.error(f"HTTP {e.response.status_code}: {e.response.text}")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Failed: {e}")
+
+        def _place_sync() -> None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                import threading
+
+                _err = {"e": None}
+
+                def _runner():
+                    try:
+                        asyncio.run(_place_async())
+                    except Exception as e:  # noqa: BLE001
+                        _err["e"] = e
+
+                t = threading.Thread(target=_runner, daemon=True)
+                t.start()
+                t.join()
+                if _err["e"] is not None:
+                    st.error(f"Failed: {_err['e']}")
+            else:
+                asyncio.run(_place_async())
+
+        st.button(
+            "Place Tiny Order",
+            on_click=_place_sync,
+            disabled=(not confirmed) or (str(ex_saved.get("venue", "spot")) != "spot"),
+            type="primary",
+        )
 
 
 # Render vertical separator in the thin middle column

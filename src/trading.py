@@ -283,8 +283,8 @@ class TradingEngine:
                     last_closed = int(pos["id"])  # continue to evaluate others
                     continue
 
-            # 4) Inverse recommendation close (slots not relevant for close)
-            if recommendation_direction and confidence is not None:
+            # 4) Inverse recommendation close (ignore confidence; close immediately on opposite)
+            if recommendation_direction:
                 inv = (
                     recommendation_direction.lower() in ("buy", "long")
                     and pos.get("direction") == "short"
@@ -293,7 +293,7 @@ class TradingEngine:
                         and pos.get("direction") == "long"
                     )
                 )
-                if inv and confidence >= self.settings.confidence_threshold:
+                if inv:
                     self._close_with_fees(
                         pos,
                         ts_ms,

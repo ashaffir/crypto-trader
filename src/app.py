@@ -616,15 +616,45 @@ async def pipeline() -> None:
                                             ),
                                             None,
                                         )
-                                        # Map last_mid to mid for engine convenience
-                                        if (
-                                            isinstance(price_info, dict)
-                                            and "last_mid" in price_info
-                                        ):
-                                            price_info = {
-                                                "mid": price_info.get("last_mid"),
-                                                "last_px": None,
-                                            }
+                                        # Map summary to numeric price snapshot for engine
+                                        if isinstance(price_info, dict):
+                                            # Legacy path: if last_mid present, use it directly
+                                            if "last_mid" in price_info:
+                                                price_info = {
+                                                    "mid": price_info.get("last_mid"),
+                                                    "last_px": None,
+                                                }
+                                            else:
+                                                # New compact stats schema: mid is a dict
+                                                mid_val = None
+                                                try:
+                                                    mid_field = price_info.get("mid")
+                                                    if isinstance(mid_field, dict):
+                                                        # Prefer mean; fallback to max/min
+                                                        mid_val = (
+                                                            mid_field.get("mean")
+                                                            if mid_field.get("mean")
+                                                            is not None
+                                                            else (
+                                                                mid_field.get("max")
+                                                                if mid_field.get("max")
+                                                                is not None
+                                                                else mid_field.get(
+                                                                    "min"
+                                                                )
+                                                            )
+                                                        )
+                                                    elif isinstance(
+                                                        mid_field, (int, float)
+                                                    ):
+                                                        mid_val = float(mid_field)
+                                                except Exception:
+                                                    mid_val = None
+                                                if mid_val is not None:
+                                                    price_info = {
+                                                        "mid": mid_val,
+                                                        "last_px": None,
+                                                    }
                                     except Exception:
                                         price_info = None
 
