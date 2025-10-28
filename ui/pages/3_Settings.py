@@ -423,13 +423,49 @@ with llm_col:
             "Side", options=["BUY", "SELL"], horizontal=True, key="tiny_side"
         )
         to_amount = st.number_input(
-            "Quote Amount",
+            "Quote Amount (in quote currency, e.g., USDT)",
             min_value=0.0,
             value=5.0,
             step=0.1,
             help="Amount in quote currency (e.g., USDT)",
             key="tiny_amount",
         )
+
+        # Display minimum notional constraint for the selected symbol
+        min_notional = None
+        quote_ccy = "USDT"
+        try:
+            base = (
+                "https://api.binance.com"
+                if str(ex_saved.get("network", "testnet")).lower() == "mainnet"
+                else "https://testnet.binance.vision"
+            )
+            sym = str(to_symbol).strip().upper()
+            info = httpx.get(f"{base}/api/v3/exchangeInfo?symbol={sym}", timeout=5.0)
+            info.raise_for_status()
+            data = info.json() or {}
+            arr = data.get("symbols") or []
+            if arr:
+                q = arr[0].get("quoteAsset")
+                if isinstance(q, str) and q:
+                    quote_ccy = q
+                for f in arr[0].get("filters", []) or []:
+                    t = f.get("filterType")
+                    if t in ("NOTIONAL", "MIN_NOTIONAL") and f.get("minNotional"):
+                        try:
+                            mn = float(f.get("minNotional"))
+                            if mn > 0:
+                                min_notional = mn
+                                break
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        if min_notional is not None:
+            st.caption(
+                f"Minimum notional for {str(to_symbol).upper()}: ≥ {min_notional} {quote_ccy}"
+            )
 
         # Extra confirmation for mainnet
         confirm_label = (
@@ -444,6 +480,16 @@ with llm_col:
             err = _tiny_validate_exec(ex)
             if err:
                 st.error(err)
+                return
+            # Enforce minimum notional before sending
+            try:
+                amt = float(to_amount)
+            except Exception:
+                amt = 0.0
+            if (min_notional is not None) and (amt < float(min_notional)):
+                st.error(
+                    f"Amount below minimum notional (≥ {min_notional} {quote_ccy}). Increase amount."
+                )
                 return
             try:
                 res = await _tiny_place_order(
