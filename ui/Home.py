@@ -17,6 +17,8 @@ from ui.lib.settings_state import (
     load_consensus_settings,
     save_consensus_settings,
     load_llm_configs,
+    load_mirror_mode,
+    save_mirror_mode,
 )
 
 
@@ -173,14 +175,16 @@ if int(new_minutes) != int(current_minutes):
 # Spacer
 st.write("")
 
-# --- Consensus Mode ---
+# --- Consensus and Mirror Modes ---
 try:
     cons = load_consensus_settings()
     all_llms = [cfg.get("name") for cfg in load_llm_configs()] or []
     all_llms = [x for x in all_llms if isinstance(x, str) and x]
 
-    col_c1, col_c2 = st.columns([1, 2])
-    with col_c1:
+    col_left, col_right = st.columns([1, 1])
+
+    # Left: Consensus toggle with members listed beneath
+    with col_left:
         new_enabled = st.toggle(
             "Consensus mode",
             value=bool(cons.get("enabled", False)),
@@ -188,20 +192,19 @@ try:
             key="consensus_enabled",
         )
 
-    # Persist enabled toggle immediately (keep current members)
-    if new_enabled != bool(cons.get("enabled", False)):
-        ok = save_consensus_settings(
-            {
-                "enabled": bool(new_enabled),
-                "members": list(cons.get("members", [])),
-            }
-        )
-        if ok:
-            st.toast("Consensus mode updated")
-        else:
-            st.error("Failed to update consensus mode")
+        # Persist enabled toggle immediately (keep current members)
+        if new_enabled != bool(cons.get("enabled", False)):
+            ok = save_consensus_settings(
+                {
+                    "enabled": bool(new_enabled),
+                    "members": list(cons.get("members", [])),
+                }
+            )
+            if ok:
+                st.toast("Consensus mode updated")
+            else:
+                st.error("Failed to update consensus mode")
 
-    with col_c2:
         with st.form("consensus_members_form", clear_on_submit=False):
             st.caption("Select LLMs required for consensus:")
             current = set(cons.get("members", []))
@@ -222,6 +225,25 @@ try:
                     st.toast("Consensus members saved")
                 else:
                     st.error("Failed to save consensus members")
+
+    # Right: Mirror mode toggle
+    with col_right:
+        try:
+            mirror_current = bool(load_mirror_mode())
+        except Exception:
+            mirror_current = False
+        mirror_new = st.toggle(
+            "Mirror mode",
+            value=mirror_current,
+            help="When enabled, execute the opposite of each LLM recommendation (buy→sell, sell→buy).",
+            key="mirror_mode_enabled",
+        )
+        if mirror_new != mirror_current:
+            ok = save_mirror_mode(bool(mirror_new))
+            if ok:
+                st.toast("Mirror mode updated")
+            else:
+                st.error("Failed to update mirror mode")
 except Exception as e:
     st.warning(f"Consensus controls unavailable: {e}")
 

@@ -61,6 +61,8 @@ async def pipeline() -> None:
     consensus_enabled: bool = False
     consensus_members: list[str] = []
     consensus_clients: dict[str, LLMClient] = {}
+    # Mirror (inverse) mode
+    mirror_enabled: bool = False
 
     def _apply_llm_timing(overrides: Dict | None) -> None:
         nonlocal llm_window_s, llm_refresh_s
@@ -244,7 +246,7 @@ async def pipeline() -> None:
             pass
 
     async def llm_loop() -> None:
-        nonlocal llm_client, llm_window_s, llm_refresh_s
+        nonlocal llm_client, llm_window_s, llm_refresh_s, mirror_enabled
         # Initialize from llm_configs.json before entering loop
         _rebuild_llm_client_from_llm_configs(initial=True)
         _rebuild_consensus_clients_if_needed()
@@ -267,6 +269,16 @@ async def pipeline() -> None:
                     _changed, _ovr = runtime_cfg.load_if_changed()
                     settings = load_trader_settings(_ovr)
                     engine.update_settings(settings)
+                    # Update mirror mode flag from overrides (llm.mirror_mode)
+                    try:
+                        llm_section = (
+                            (_ovr or {}).get("llm") if isinstance(_ovr, dict) else None
+                        )
+                        mirror_enabled = bool(
+                            (llm_section or {}).get("mirror_mode", False)
+                        )
+                    except Exception:
+                        pass
                     # Rebuild broker if execution settings changed
                     try:
                         new_exec = ExecutionSettings.from_overrides(_ovr)
@@ -524,10 +536,15 @@ async def pipeline() -> None:
                                     ts_ms=now_ms,
                                     price_info=price_info,
                                 )
-                                # Try open
+                                # Try open (apply mirror mode to execution)
+                                _exec_dir = (
+                                    ("sell" if direction == "buy" else "buy")
+                                    if mirror_enabled
+                                    else direction
+                                )
                                 engine.maybe_open_from_recommendation(
                                     symbol=sym_upper,
-                                    direction=direction,
+                                    direction=_exec_dir,
                                     leverage=leverage,
                                     confidence=consensus_conf,
                                     ts_ms=now_ms,
@@ -667,9 +684,15 @@ async def pipeline() -> None:
                                     )
 
                                     # 2) If no open or slot available and confidence ok -> open
+                                    # Apply mirror mode for execution direction
+                                    _exec_dir = (
+                                        ("sell" if direction == "buy" else "buy")
+                                        if mirror_enabled
+                                        else direction
+                                    )
                                     engine.maybe_open_from_recommendation(
                                         symbol=asset,
-                                        direction=direction,
+                                        direction=_exec_dir,
                                         leverage=leverage,
                                         confidence=confidence,
                                         ts_ms=now_ms,

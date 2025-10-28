@@ -454,6 +454,9 @@ __all__ = [
     # Consensus helpers
     "load_consensus_settings",
     "save_consensus_settings",
+    # Mirror mode helpers
+    "load_mirror_mode",
+    "save_mirror_mode",
     # Positions helpers
     "load_positions_settings",
     "save_positions_settings",
@@ -515,6 +518,31 @@ def save_execution_settings(settings: dict, base_dir: Optional[str] = None) -> b
         if k in settings:
             cur[k] = settings[k]
     merged["execution"] = cur
+    return _safe_write_json(path, merged)
+
+
+# ---- LLM mirror mode (inverse execution) ----
+
+
+def load_mirror_mode(base_dir: Optional[str] = None) -> bool:
+    """Return boolean flag stored at llm.mirror_mode (default False)."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path) or {}
+    llm = cfg.get("llm") if isinstance(cfg, dict) else None
+    try:
+        return bool((llm or {}).get("mirror_mode", False))
+    except Exception:
+        return False
+
+
+def save_mirror_mode(enabled: bool, base_dir: Optional[str] = None) -> bool:
+    """Persist boolean flag under llm.mirror_mode."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    llm = dict((merged.get("llm") or {}))
+    llm["mirror_mode"] = bool(enabled)
+    merged["llm"] = llm
     return _safe_write_json(path, merged)
 
 
