@@ -528,10 +528,15 @@ async def pipeline() -> None:
                                         }
                                 except Exception:
                                     price_info = None
-                                # Close inverse or TP/SL
+                                # Close inverse or TP/SL (use mirrored recommendation under mirror mode)
+                                _close_rec_dir = (
+                                    ("sell" if direction == "buy" else "buy")
+                                    if mirror_enabled
+                                    else direction
+                                )
                                 engine.maybe_close_on_inverse_or_tp_sl(
                                     symbol=sym_upper,
-                                    recommendation_direction=direction,
+                                    recommendation_direction=_close_rec_dir,
                                     confidence=consensus_conf,
                                     ts_ms=now_ms,
                                     price_info=price_info,
@@ -675,9 +680,15 @@ async def pipeline() -> None:
                                     except Exception:
                                         price_info = None
 
+                                    # Close inverse or TP/SL (direction mirrored if mirror mode)
+                                    _close_rec_dir = (
+                                        ("sell" if direction == "buy" else "buy")
+                                        if mirror_enabled
+                                        else direction
+                                    )
                                     engine.maybe_close_on_inverse_or_tp_sl(
                                         symbol=asset,
-                                        recommendation_direction=direction,
+                                        recommendation_direction=_close_rec_dir,
                                         confidence=confidence,
                                         ts_ms=now_ms,
                                         price_info=price_info,
