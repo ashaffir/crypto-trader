@@ -14,6 +14,9 @@ from .utils.fees import estimate_trade_fees_usd
 class TraderSettings:
     concurrent_positions: int = 1
     confidence_threshold: float = 0.8
+    # Optional filter to require a stronger reversal signal than the one used to open
+    confidence_diff_filter_enabled: bool = False
+    confidence_diff_delta: float = 0.2
     default_position_size_usd: float = 0.0
     default_leverage: Optional[int] = None
     max_leverage: int = 0  # 0 means unlimited
@@ -40,6 +43,18 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
             out.concurrent_positions = max(0, int(tr.get("concurrent_positions", 1)))
         if "confidence_threshold" in tr:
             out.confidence_threshold = float(tr.get("confidence_threshold", 0.8))
+        # Optional confidence differential filter
+        if "confidence_diff_filter_enabled" in tr:
+            out.confidence_diff_filter_enabled = bool(
+                tr.get("confidence_diff_filter_enabled", False)
+            )
+        if "confidence_diff_delta" in tr:
+            try:
+                out.confidence_diff_delta = max(
+                    0.0, float(tr.get("confidence_diff_delta", 0.2))
+                )
+            except Exception:
+                pass
         if "default_position_size_usd" in tr:
             out.default_position_size_usd = float(
                 tr.get("default_position_size_usd", 0.0)
@@ -283,7 +298,10 @@ class TradingEngine:
                     last_closed = int(pos["id"])  # continue to evaluate others
                     continue
 
-            # 4) Inverse recommendation close (ignore confidence; close immediately on opposite)
+            # 4) Inverse recommendation close
+            # New default behavior: require opposite direction AND confidence >= threshold.
+            # Optionally, if confidence differential filter is enabled, also require
+            # (new_confidence - old_confidence) > confidence_diff_delta to avoid false reversals.
             if recommendation_direction:
                 inv = (
                     recommendation_direction.lower() in ("buy", "long")
@@ -294,13 +312,46 @@ class TradingEngine:
                     )
                 )
                 if inv:
-                    self._close_with_fees(
-                        pos,
-                        ts_ms,
-                        float(exit_px) if exit_px is not None else None,
-                        close_reason="Inverse",
-                    )
-                    last_closed = int(pos["id"])  # continue to evaluate others
+                    # Require LLM confidence meets threshold
+                    meets_threshold = False
+                    try:
+                        if confidence is not None and float(confidence) >= float(
+                            self.settings.confidence_threshold
+                        ):
+                            meets_threshold = True
+                    except Exception:
+                        meets_threshold = False
+
+                    # Optional confidence differential filter
+                    passes_diff = True
+                    try:
+                        if self.settings.confidence_diff_filter_enabled:
+                            old_conf = (
+                                float(pos.get("confidence"))
+                                if pos.get("confidence") is not None
+                                else None
+                            )
+                            new_conf = (
+                                float(confidence) if confidence is not None else None
+                            )
+                            # If we cannot compute diff reliably, reject close to avoid false reversals
+                            if old_conf is None or new_conf is None:
+                                passes_diff = False
+                            else:
+                                passes_diff = (
+                                    float(new_conf) - float(old_conf)
+                                ) > float(self.settings.confidence_diff_delta)
+                    except Exception:
+                        passes_diff = False
+
+                    if meets_threshold and passes_diff:
+                        self._close_with_fees(
+                            pos,
+                            ts_ms,
+                            float(exit_px) if exit_px is not None else None,
+                            close_reason="Inverse",
+                        )
+                        last_closed = int(pos["id"])  # continue to evaluate others
 
         return last_closed
 

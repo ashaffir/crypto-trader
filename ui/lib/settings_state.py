@@ -20,6 +20,8 @@ def load_trader_settings(base_dir: Optional[str] = None) -> dict:
     out: dict[str, object] = {
         "concurrent_positions": 1,
         "confidence_threshold": 0.8,
+        "confidence_diff_filter_enabled": False,
+        "confidence_diff_delta": 0.2,
         "default_position_size_usd": 0.0,
         "default_leverage": None,
         "max_leverage": 0,  # 0 means unlimited

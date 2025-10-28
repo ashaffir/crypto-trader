@@ -66,13 +66,23 @@ def test_inverse_close(tmp_path):
         llm_model="x",
     )
     assert pid is not None and store.count_open() == 1
-    # Inverse rec should close regardless of confidence
+    # Inverse rec should only close if confidence >= threshold
+    # Below threshold -> no close
+    not_closed = eng.maybe_close_on_inverse_or_tp_sl(
+        symbol="BTCUSDT",
+        recommendation_direction="sell",
+        confidence=0.1,  # below threshold
+        ts_ms=ts + 1000,
+        price_info={"mid": 99.0, "last_px": 99.0},
+    )
+    assert not_closed is None
+    # Meets threshold -> close
     closed = eng.maybe_close_on_inverse_or_tp_sl(
         symbol="BTCUSDT",
         recommendation_direction="sell",
-        confidence=0.1,  # below threshold, should still close
-        ts_ms=ts + 1000,
-        price_info={"mid": 99.0, "last_px": 99.0},
+        confidence=0.85,  # >= 0.8
+        ts_ms=ts + 2000,
+        price_info={"mid": 98.5, "last_px": 98.5},
     )
     assert isinstance(closed, int)
 
@@ -94,13 +104,57 @@ def test_inverse_close_without_confidence(tmp_path):
         llm_model="x",
     )
     assert pid is not None and store.count_open() == 1
-    # Opposite rec with confidence None should still close
+    # Opposite rec with confidence None should NOT close by default
     closed = eng.maybe_close_on_inverse_or_tp_sl(
         symbol="ETHUSDT",
         recommendation_direction="buy",
         confidence=None,
         ts_ms=ts + 1000,
         price_info={"mid": 201.0, "last_px": 201.0},
+    )
+    assert closed is None
+
+
+def test_inverse_close_with_confidence_diff_filter(tmp_path):
+    store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
+    # Enable diff filter with delta 0.2
+    eng = TradingEngine(
+        store,
+        TraderSettings(
+            concurrent_positions=2,
+            confidence_threshold=0.6,
+            confidence_diff_filter_enabled=True,
+            confidence_diff_delta=0.2,
+        ),
+    )
+    ts = 1_700_000_000_000
+    # Open long with old_confidence = 0.7
+    _ = eng.maybe_open_from_recommendation(
+        symbol="BTCUSDT",
+        direction="buy",
+        leverage=2,
+        confidence=0.7,
+        ts_ms=ts,
+        price_info={"mid": 100.0, "last_px": 100.0},
+        llm_model="x",
+    )
+    assert store.count_open() == 1
+    # New opposite with confidence 0.75 (diff = 0.05 < 0.2) -> should NOT close
+    not_closed = eng.maybe_close_on_inverse_or_tp_sl(
+        symbol="BTCUSDT",
+        recommendation_direction="sell",
+        confidence=0.75,
+        ts_ms=ts + 1000,
+        price_info={"mid": 99.5, "last_px": 99.5},
+    )
+    assert not_closed is None
+    # New opposite with confidence 0.95 (diff = 0.25 > 0.2) -> should close
+    closed = eng.maybe_close_on_inverse_or_tp_sl(
+        symbol="BTCUSDT",
+        recommendation_direction="sell",
+        confidence=0.95,
+        ts_ms=ts + 2000,
+        price_info={"mid": 98.0, "last_px": 98.0},
     )
     assert isinstance(closed, int)
 
