@@ -42,12 +42,36 @@ async def _get(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> 
     return r.json()
 
 
+def _recv_window_ms_from_env() -> int:
+    try:
+        v = int(os.getenv("BINANCE_RECV_WINDOW_MS", "60000"))
+        return max(0, v)
+    except Exception:
+        return 60000
+
+
 async def fetch_spot_account_info(
-    *, api_key: str, api_secret: str, network: str = "mainnet"
+    *,
+    api_key: str,
+    api_secret: str,
+    network: str = "mainnet",
+    recv_window_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     base = _choose_base("spot", network)
     ts = int(time.time() * 1000)
-    query = f"timestamp={ts}"
+    # Try to use server time if available to avoid drift
+    try:
+        async with httpx.AsyncClient() as _c:
+            t = await _c.get(f"{base}/api/v3/time", timeout=5.0)
+            t.raise_for_status()
+            jd = t.json() or {}
+            if isinstance(jd, dict) and jd.get("serverTime"):
+                ts = int(jd["serverTime"])  # ms
+    except Exception:
+        pass
+    rw = _recv_window_ms_from_env() if recv_window_ms is None else int(recv_window_ms)
+    # Add recvWindow to tolerate clock drift
+    query = f"timestamp={ts}&recvWindow={rw}"
     sig = _sign(query, api_secret)
     url = f"{base}/api/v3/account?{query}&signature={sig}"
     async with httpx.AsyncClient() as client:
@@ -56,11 +80,26 @@ async def fetch_spot_account_info(
 
 
 async def fetch_futures_account_info(
-    *, api_key: str, api_secret: str, network: str = "mainnet"
+    *,
+    api_key: str,
+    api_secret: str,
+    network: str = "mainnet",
+    recv_window_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     base = _choose_base("futures", network)
     ts = int(time.time() * 1000)
-    query = f"timestamp={ts}"
+    # Try to use server time if available to avoid drift
+    try:
+        async with httpx.AsyncClient() as _c:
+            t = await _c.get(f"{base}/fapi/v1/time", timeout=5.0)
+            t.raise_for_status()
+            jd = t.json() or {}
+            if isinstance(jd, dict) and jd.get("serverTime"):
+                ts = int(jd["serverTime"])  # ms
+    except Exception:
+        pass
+    rw = _recv_window_ms_from_env() if recv_window_ms is None else int(recv_window_ms)
+    query = f"timestamp={ts}&recvWindow={rw}"
     sig = _sign(query, api_secret)
     url = f"{base}/fapi/v2/account?{query}&signature={sig}"
     async with httpx.AsyncClient() as client:
@@ -168,10 +207,14 @@ async def fetch_balances_from_runtime_config() -> Dict[str, Any]:
 
         venue = str((ex or {}).get("venue") or cfg.get("market") or "spot").lower()
         network = str((ex or {}).get("network") or "testnet").lower()
+        recv_window_ms_cfg = (ex or {}).get("recv_window_ms")
 
         if venue == "futures":
             info = await fetch_futures_account_info(
-                api_key=api_key, api_secret=api_secret, network=network
+                api_key=api_key,
+                api_secret=api_secret,
+                network=network,
+                recv_window_ms=recv_window_ms_cfg,
             )
             assets = info.get("assets", []) if isinstance(info, dict) else []
             normalized = []
@@ -188,7 +231,10 @@ async def fetch_balances_from_runtime_config() -> Dict[str, Any]:
             }
         else:
             info = await fetch_spot_account_info(
-                api_key=api_key, api_secret=api_secret, network=network
+                api_key=api_key,
+                api_secret=api_secret,
+                network=network,
+                recv_window_ms=recv_window_ms_cfg,
             )
             bals = info.get("balances", []) if isinstance(info, dict) else []
             normalized = []
@@ -210,5 +256,11 @@ async def fetch_balances_from_runtime_config() -> Dict[str, Any]:
                 "network": network,
                 "balances": normalized,
             }
+    except httpx.HTTPStatusError as e:  # pragma: no cover
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = {"msg": str(e)}
+        return {"ok": False, "error": "http_error", "detail": detail}
     except Exception as e:  # pragma: no cover
         return {"ok": False, "error": "exception", "detail": str(e)}

@@ -375,6 +375,19 @@ with llm_col:
     api_secret = st.text_input(
         "API Secret", value=str(exec_cur.get("api_secret") or ""), type="password"
     )
+    # Optional recv_window_ms to mitigate timestamp drift
+    try:
+        _recv_default = int((exec_cur.get("recv_window_ms") or 60000))
+    except Exception:
+        _recv_default = 60000
+    recv_window_ms = st.number_input(
+        "recvWindow (ms)",
+        min_value=0,
+        max_value=600000,
+        value=_recv_default,
+        step=1000,
+        help="Tolerance window for Binance timestamp checks. 60000 (60s) recommended.",
+    )
     if st.button("Save Execution Settings"):
         ok = save_execution_settings(
             {
@@ -383,6 +396,7 @@ with llm_col:
                 "network": exec_network,
                 "api_key": api_key.strip() or None,
                 "api_secret": api_secret.strip() or None,
+                "recv_window_ms": int(recv_window_ms),
             }
         )
         if ok:

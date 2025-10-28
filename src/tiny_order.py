@@ -38,11 +38,20 @@ def _load_execution() -> Dict[str, Any]:
         "network": "testnet",
         "api_key": None,
         "api_secret": None,
+        "recv_window_ms": 60000,
     }
     if isinstance(ex, dict):
         for k in out.keys():
             if k in ex:
                 out[k] = ex[k]
+    # env override
+    try:
+        if os.getenv("BINANCE_RECV_WINDOW_MS") is not None:
+            out["recv_window_ms"] = max(
+                0, int(os.getenv("BINANCE_RECV_WINDOW_MS", "60000"))
+            )
+    except Exception:
+        pass
     return out
 
 
@@ -101,12 +110,21 @@ async def place_spot_market_order(
             # Fall back to local clock
             pass
 
+        try:
+            recv_window_ms = int(ex.get("recv_window_ms", 60000))
+            if os.getenv("BINANCE_RECV_WINDOW_MS") is not None:
+                recv_window_ms = max(
+                    0, int(os.getenv("BINANCE_RECV_WINDOW_MS", "60000"))
+                )
+        except Exception:
+            recv_window_ms = 60000
+
         params = {
             "symbol": symbol.upper(),
             "side": side_norm,
             "type": "MARKET",
             "quoteOrderQty": f"{quote_qty}",
-            "recvWindow": 5000,
+            "recvWindow": recv_window_ms,
             "timestamp": ts,
             # Optional: reduce risk of duplicates
             "newClientOrderId": base64.urlsafe_b64encode(f"tiny-{ts}".encode())

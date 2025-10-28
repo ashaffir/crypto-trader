@@ -59,8 +59,16 @@ try:
 
     if not isinstance(data, dict) or not data.get("ok"):
         err = data.get("error") if isinstance(data, dict) else "unknown"
+        detail = data.get("detail") if isinstance(data, dict) else None
         if err == "missing_credentials":
             st.info("Add API key/secret in Settings → Execution to view live balances.")
+        elif err == "http_error" and isinstance(detail, (dict, str)):
+            # Show more informative HTTP error details if available
+            if isinstance(detail, dict):
+                msg = detail.get("msg") or detail.get("message") or str(detail)
+            else:
+                msg = detail
+            st.warning(f"Unable to load balances: http_error — {msg}")
         else:
             st.warning(f"Unable to load balances: {err}")
     else:
