@@ -8,7 +8,11 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 from ui.lib.common import render_status_badge
-from ui.lib.settings_state import load_sidebar_settings
+from ui.lib.settings_state import (
+    load_sidebar_settings,
+    load_positions_settings,
+    save_positions_settings,
+)
 
 try:
     from streamlit_autorefresh import st_autorefresh as _st_autorefresh  # type: ignore
@@ -200,10 +204,17 @@ else:
     if total_pnl is not None:
         st.caption(f"Total PnL (all rows): {total_pnl:.2f}")
 
-    # Latest-N Total PnL control
+    # Latest-N Total PnL control (persisted)
     try:
         max_rows = max(1, len(df))
-        default_n = min(100, max_rows)
+        # Load persisted default; clamp to [1, max_rows]
+        try:
+            _persisted = load_positions_settings()
+            _persisted_n = int(_persisted.get("total_pnl_latest_n", 100))
+        except Exception:
+            _persisted = {}
+            _persisted_n = 100
+        default_n = int(max(1, min(_persisted_n, max_rows)))
         n_latest = st.number_input(
             "Total PnL window (latest N rows)",
             min_value=1,
@@ -213,6 +224,13 @@ else:
             key="positions_total_pnl_latest_n",
             help="Sum PnL over the most recent N rows by table order (newest first).",
         )
+
+        # Persist if changed
+        try:
+            if int(n_latest) != int(_persisted_n):
+                save_positions_settings({"total_pnl_latest_n": int(n_latest)})
+        except Exception:
+            pass
 
         # Use visible table ordering: id DESC (matches SELECT ORDER BY id DESC)
         if "id" in df.columns:

@@ -454,6 +454,9 @@ __all__ = [
     # Consensus helpers
     "load_consensus_settings",
     "save_consensus_settings",
+    # Positions helpers
+    "load_positions_settings",
+    "save_positions_settings",
 ]
 
 # ---- Market mode (spot/futures) helpers ----
@@ -590,4 +593,45 @@ def save_statistics_settings(settings: dict, base_dir: Optional[str] = None) -> 
         for k, v in settings.items():
             cur[k] = v
     merged["statistics"] = cur
+    return _safe_write_json(path, merged)
+
+
+# ---- Positions page settings ----
+
+
+def load_positions_settings(base_dir: Optional[str] = None) -> dict:
+    """Load positions page settings from runtime_config.json under key 'positions'.
+
+    Defaults:
+      total_pnl_latest_n = 100
+    """
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    raw = cfg.get("positions") if isinstance(cfg, dict) else None
+    out: dict[str, object] = {
+        "total_pnl_latest_n": 100,
+    }
+    if isinstance(raw, dict):
+        for k in list(out.keys()):
+            if k in raw:
+                out[k] = raw[k]
+    return out
+
+
+def save_positions_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist positions page settings under key 'positions'."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    cur = load_positions_settings(base_dir)
+    if isinstance(settings, dict):
+        if "total_pnl_latest_n" in settings:
+            try:
+                n = int(settings.get("total_pnl_latest_n", 100))
+                if n < 1:
+                    n = 1
+                cur["total_pnl_latest_n"] = n
+            except Exception:
+                pass
+    merged["positions"] = cur
     return _safe_write_json(path, merged)

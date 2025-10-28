@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 
-DEFAULT_CONTROL_DIR = os.getenv("CONTROL_DIR", os.path.join("data", "control"))
+DEFAULT_CONTROL_DIR = os.path.join("data", "control")
 
 
 @dataclass
 class RuntimeConfigPaths:
-    base_dir: str = DEFAULT_CONTROL_DIR
+    base_dir: str = ""
+
+    def __post_init__(self) -> None:
+        # Resolve at instantiation time to honor current environment
+        if not self.base_dir:
+            self.base_dir = os.getenv("CONTROL_DIR", DEFAULT_CONTROL_DIR)
 
     @property
     def runtime_file(self) -> str:
@@ -82,7 +87,8 @@ class RuntimeConfigManager:
     """
 
     def __init__(self, base_dir: Optional[str] = None) -> None:
-        self.paths = RuntimeConfigPaths(base_dir or DEFAULT_CONTROL_DIR)
+        resolved_base = base_dir or os.getenv("CONTROL_DIR", DEFAULT_CONTROL_DIR)
+        self.paths = RuntimeConfigPaths(resolved_base)
         self._last_loaded: Optional[Dict[str, Any]] = None
         self._last_llm_mtime: Optional[float] = None
 
