@@ -13,7 +13,9 @@ from .utils.fees import estimate_trade_fees_usd
 @dataclass
 class TraderSettings:
     concurrent_positions: int = 1
-    confidence_threshold: float = 0.8
+    # Per-direction confidence thresholds (required; defaults provided)
+    long_confidence_threshold: float = 0.8
+    short_confidence_threshold: float = 0.8
     # Optional filter to require a stronger reversal signal than the one used to open
     confidence_diff_filter_enabled: bool = False
     confidence_diff_delta: float = 0.2
@@ -41,8 +43,21 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
     try:
         if "concurrent_positions" in tr:
             out.concurrent_positions = max(0, int(tr.get("concurrent_positions", 1)))
-        if "confidence_threshold" in tr:
-            out.confidence_threshold = float(tr.get("confidence_threshold", 0.8))
+        # Per-direction thresholds (required; default to 0.8)
+        try:
+            if tr.get("long_confidence_threshold") not in (None, ""):
+                out.long_confidence_threshold = float(
+                    tr.get("long_confidence_threshold")
+                )
+        except Exception:
+            pass
+        try:
+            if tr.get("short_confidence_threshold") not in (None, ""):
+                out.short_confidence_threshold = float(
+                    tr.get("short_confidence_threshold")
+                )
+        except Exception:
+            pass
         # Optional confidence differential filter
         if "confidence_diff_filter_enabled" in tr:
             out.confidence_diff_filter_enabled = bool(
@@ -114,6 +129,12 @@ class TradingEngine:
     def update_settings(self, settings: TraderSettings) -> None:
         self.settings = settings
 
+    def _confidence_threshold_for(self, direction: str) -> float:
+        d = str(direction).lower()
+        if d in ("buy", "long"):
+            return float(self.settings.long_confidence_threshold)
+        return float(self.settings.short_confidence_threshold)
+
     # price_source: dict from FeatureEngine snapshot to evaluate TP/SL
     def maybe_open_from_recommendation(
         self,
@@ -130,8 +151,12 @@ class TradingEngine:
         # Slot check
         if self.store.count_open() >= self.settings.concurrent_positions:
             return None
-        # Confidence check
-        if confidence is not None and confidence < self.settings.confidence_threshold:
+        # Confidence check (per-direction if configured)
+        try:
+            threshold = self._confidence_threshold_for(direction)
+        except Exception:
+            threshold = 0.8
+        if confidence is not None and float(confidence) < float(threshold):
             return None
         # Leverage choice
         lev = (
@@ -315,8 +340,12 @@ class TradingEngine:
                     # Require LLM confidence meets threshold
                     meets_threshold = False
                     try:
+                        # Use per-direction threshold based on the new recommendation direction
+                        threshold = self._confidence_threshold_for(
+                            recommendation_direction
+                        )
                         if confidence is not None and float(confidence) >= float(
-                            self.settings.confidence_threshold
+                            threshold
                         ):
                             meets_threshold = True
                     except Exception:

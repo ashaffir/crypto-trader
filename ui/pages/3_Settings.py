@@ -333,70 +333,93 @@ with tab_trader:
     st.markdown("**Trader Settings**")
     cur = load_trader_settings()
 
-    conc = st.number_input(
-        "Concurrent positions allowed",
-        min_value=0,
-        value=int(cur.get("concurrent_positions", 1)),
-        step=1,
-        help="Maximum number of open positions at the same time",
-    )
+    left, right = st.columns([1, 1])
 
-    conf = st.number_input(
-        "Confidence Threshold",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(cur.get("confidence_threshold", 0.8)),
-        step=0.01,
-        help="Minimum confidence score required to take a trade",
-    )
+    with left:
+        conc = st.number_input(
+            "Concurrent positions allowed",
+            min_value=0,
+            value=int(cur.get("concurrent_positions", 1)),
+            step=1,
+            help="Maximum number of open positions at the same time",
+        )
 
-    # Optional: Confidence differential filter to avoid false reversals
-    diff_filter = st.toggle(
-        "Enable Confidence Differential Filter",
-        value=bool(cur.get("confidence_diff_filter_enabled", False)),
-        help=(
-            "When enabled, an opposite signal will only close an open position if "
-            "(new_confidence - old_confidence) exceeds ΔC."
-        ),
-    )
-    delta_c = st.number_input(
-        "ΔC (Confidence Differential Threshold)",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(cur.get("confidence_diff_delta", 0.2)),
-        step=0.01,
-        help="Required increase in confidence to accept reversal closes",
-    )
+        # Per-direction thresholds (default to global if None)
+        lc_default = float(
+            cur.get("long_confidence_threshold")
+            if cur.get("long_confidence_threshold") not in (None, "")
+            else 0.8
+        )
+        sh_default = float(
+            cur.get("short_confidence_threshold")
+            if cur.get("short_confidence_threshold") not in (None, "")
+            else 0.8
+        )
+        lc = st.number_input(
+            "LC: Long Confidence Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=lc_default,
+            step=0.01,
+            help="Required confidence for BUY/LONG recommendations",
+        )
+        sh = st.number_input(
+            "SH: Short Confidence Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=sh_default,
+            step=0.01,
+            help="Required confidence for SELL/SHORT recommendations",
+        )
 
-    size = st.number_input(
-        "Default Position Size (USD)",
-        min_value=0.0,
-        value=float(cur.get("default_position_size_usd", 0.0)),
-        step=10.0,
-        help="Nominal USD size for new positions (informational)",
-    )
+        # Optional: Confidence differential filter to avoid false reversals
+        diff_filter = st.toggle(
+            "Enable Confidence Differential Filter",
+            value=bool(cur.get("confidence_diff_filter_enabled", False)),
+            help=(
+                "When enabled, an opposite signal will only close an open position if "
+                "(new_confidence - old_confidence) exceeds ΔC."
+            ),
+        )
+        delta_c = st.number_input(
+            "ΔC (Confidence Differential Threshold)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(cur.get("confidence_diff_delta", 0.2)),
+            step=0.01,
+            help="Required increase in confidence to accept reversal closes",
+        )
 
-    lev = st.number_input(
-        "Default Leverage (optional)",
-        min_value=0,
-        max_value=125,
-        value=(
-            int(cur.get("default_leverage"))
-            if cur.get("default_leverage") not in (None, "")
-            else 0
-        ),
-        step=1,
-        help="If > 0, overrides leverage from LLM",
-    )
+    with right:
+        size = st.number_input(
+            "Default Position Size (USD)",
+            min_value=0.0,
+            value=float(cur.get("default_position_size_usd", 0.0)),
+            step=10.0,
+            help="Nominal USD size for new positions (informational)",
+        )
 
-    max_lev = st.number_input(
-        "Maximum Leverage (0 = unlimited)",
-        min_value=0,
-        max_value=125,
-        value=int(cur.get("max_leverage", 0) or 0),
-        step=1,
-        help="If > 0, caps leverage used for positions",
-    )
+        lev = st.number_input(
+            "Default Leverage (optional)",
+            min_value=0,
+            max_value=125,
+            value=(
+                int(cur.get("default_leverage"))
+                if cur.get("default_leverage") not in (None, "")
+                else 0
+            ),
+            step=1,
+            help="If > 0, overrides leverage from LLM",
+        )
+
+        max_lev = st.number_input(
+            "Maximum Leverage (0 = unlimited)",
+            min_value=0,
+            max_value=125,
+            value=int(cur.get("max_leverage", 0) or 0),
+            step=1,
+            help="If > 0, caps leverage used for positions",
+        )
 
     # Stop Loss with trailing toggle
     sl_col1, sl_col2 = st.columns([1, 1])
@@ -476,7 +499,8 @@ with tab_trader:
     if st.button("Save Trader Settings"):
         payload = {
             "concurrent_positions": int(conc),
-            "confidence_threshold": float(conf),
+            "long_confidence_threshold": float(lc),
+            "short_confidence_threshold": float(sh),
             "confidence_diff_filter_enabled": bool(diff_filter),
             "confidence_diff_delta": float(delta_c),
             "default_position_size_usd": float(size),

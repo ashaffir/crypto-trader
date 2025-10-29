@@ -8,7 +8,8 @@ def test_notional_stored_and_pnl_uses_leverage(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
         ),
     )
 
@@ -19,7 +20,8 @@ def test_notional_stored_and_pnl_uses_leverage(tmp_path):
     eng.update_settings(
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             default_position_size_usd=1000.0,
             default_leverage=leverage,
             tp_percent=0.1,  # enable small TP to trigger close on +1%

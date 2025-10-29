@@ -8,7 +8,8 @@ def test_trailing_sl(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             sl_percent=0.5,
             trailing_sl_enabled=True,
             tp_disabled=True,

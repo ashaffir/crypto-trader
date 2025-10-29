@@ -6,7 +6,12 @@ from src.utils.fees import get_fee_rate
 def test_open_slot_and_confidence(tmp_path):
     store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
     eng = TradingEngine(
-        store, TraderSettings(concurrent_positions=1, confidence_threshold=0.8)
+        store,
+        TraderSettings(
+            concurrent_positions=1,
+            long_confidence_threshold=0.8,
+            short_confidence_threshold=0.8,
+        ),
     )
     ts = 1_700_000_000_000
     # Below threshold: should not open
@@ -52,7 +57,12 @@ def test_open_slot_and_confidence(tmp_path):
 def test_inverse_close(tmp_path):
     store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
     eng = TradingEngine(
-        store, TraderSettings(concurrent_positions=2, confidence_threshold=0.8)
+        store,
+        TraderSettings(
+            concurrent_positions=2,
+            long_confidence_threshold=0.8,
+            short_confidence_threshold=0.8,
+        ),
     )
     ts = 1_700_000_000_000
     # Open long
@@ -90,7 +100,12 @@ def test_inverse_close(tmp_path):
 def test_inverse_close_without_confidence(tmp_path):
     store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
     eng = TradingEngine(
-        store, TraderSettings(concurrent_positions=2, confidence_threshold=0.95)
+        store,
+        TraderSettings(
+            concurrent_positions=2,
+            long_confidence_threshold=0.95,
+            short_confidence_threshold=0.95,
+        ),
     )
     ts = 1_700_000_000_000
     # Open short
@@ -122,7 +137,8 @@ def test_inverse_close_with_confidence_diff_filter(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=2,
-            confidence_threshold=0.6,
+            long_confidence_threshold=0.6,
+            short_confidence_threshold=0.6,
             confidence_diff_filter_enabled=True,
             confidence_diff_delta=0.2,
         ),
@@ -165,7 +181,8 @@ def test_tp_sl(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             tp_percent=1.0,
             sl_percent=0.5,
             tp_disabled=False,
@@ -198,7 +215,8 @@ def test_pnl_includes_fees_when_enabled(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             default_position_size_usd=1000.0,
             default_leverage=1,
             tp_percent=1.0,
@@ -254,7 +272,8 @@ def test_default_settings_keep_previous_no_fee_behavior(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             default_position_size_usd=1000.0,
             default_leverage=2,
             tp_percent=1.0,
@@ -295,7 +314,8 @@ def test_auto_expire_stale(tmp_path):
         store,
         TraderSettings(
             concurrent_positions=1,
-            confidence_threshold=0.0,
+            long_confidence_threshold=0.0,
+            short_confidence_threshold=0.0,
             auto_expire_minutes=1,
         ),
     )

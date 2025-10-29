@@ -410,7 +410,20 @@ async def pipeline() -> None:
                                     if not isinstance(c, (int, float)):
                                         unanimous = False
                                         break
-                                    if c < engine.settings.confidence_threshold:
+                                    # Apply per-direction confidence thresholds
+                                    try:
+                                        thr = (
+                                            float(
+                                                engine.settings.long_confidence_threshold
+                                            )
+                                            if d == "buy"
+                                            else float(
+                                                engine.settings.short_confidence_threshold
+                                            )
+                                        )
+                                    except Exception:
+                                        thr = 0.8
+                                    if float(c) < float(thr):
                                         unanimous = False
                                         break
                                     dirs.append(d)

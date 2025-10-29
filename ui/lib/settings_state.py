@@ -19,7 +19,8 @@ def load_trader_settings(base_dir: Optional[str] = None) -> dict:
     raw = cfg.get("trader") if isinstance(cfg, dict) else None
     out: dict[str, object] = {
         "concurrent_positions": 1,
-        "confidence_threshold": 0.8,
+        "long_confidence_threshold": 0.8,
+        "short_confidence_threshold": 0.8,
         "confidence_diff_filter_enabled": False,
         "confidence_diff_delta": 0.2,
         "default_position_size_usd": 0.0,

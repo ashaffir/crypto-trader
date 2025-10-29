@@ -73,7 +73,7 @@ class RuntimeConfigManager:
         "symbols": ["BTCUSDT", ...],
         "trader": {
             "concurrent_positions": 1,
-            "confidence_threshold": 0.8,
+            # global confidence_threshold removed; use per-direction thresholds in runtime_config via UI
             "default_position_size_usd": 0.0,
             "default_leverage": null,
             "tp_percent": 0.0,
