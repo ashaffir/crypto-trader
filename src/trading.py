@@ -27,6 +27,8 @@ class TraderSettings:
     trailing_sl_enabled: bool = False
     tp_disabled: bool = False
     auto_expire_minutes: Optional[int] = None
+    # Disable closing positions purely on inverse LLM recommendation
+    inverse_close_disabled: bool = False
     # --- Fee settings ---
     fees_enabled: bool = False
     fee_market: str = "spot"  # "spot" | "futures"
@@ -95,6 +97,11 @@ def load_trader_settings(overrides: Optional[Dict[str, Any]]) -> TraderSettings:
             "",
         ):
             out.auto_expire_minutes = max(0, int(tr.get("auto_expire_minutes")))
+        # Inverse-close disable switch (supports two keys for convenience)
+        if "inverse_close_disabled" in tr:
+            out.inverse_close_disabled = bool(tr.get("inverse_close_disabled", False))
+        elif "disable_inverse" in tr:
+            out.inverse_close_disabled = bool(tr.get("disable_inverse", False))
         # Fees
         fees = tr.get("fees") if isinstance(tr.get("fees"), dict) else {}
         if fees:
@@ -327,6 +334,9 @@ class TradingEngine:
             # New default behavior: require opposite direction AND confidence >= threshold.
             # Optionally, if confidence differential filter is enabled, also require
             # (new_confidence - old_confidence) > confidence_diff_delta to avoid false reversals.
+            # If disabled via settings, skip inverse-based closures entirely
+            if self.settings.inverse_close_disabled:
+                continue
             if recommendation_direction:
                 inv = (
                     recommendation_direction.lower() in ("buy", "long")

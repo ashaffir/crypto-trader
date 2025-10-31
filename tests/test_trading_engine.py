@@ -341,3 +341,37 @@ def test_auto_expire_stale(tmp_path):
     assert isinstance(closed, int)
     rows = store.all_positions()
     assert rows and rows[0].get("close_reason") == "Stale"
+
+
+def test_disable_inverse_prevents_close(tmp_path):
+    store = PositionStore(db_path=str(tmp_path / "pos.sqlite"))
+    eng = TradingEngine(
+        store,
+        TraderSettings(
+            concurrent_positions=1,
+            long_confidence_threshold=0.6,
+            short_confidence_threshold=0.6,
+            inverse_close_disabled=True,
+        ),
+    )
+    ts = 1_700_000_000_000
+    # Open long with sufficient confidence
+    _ = eng.maybe_open_from_recommendation(
+        symbol="BTCUSDT",
+        direction="buy",
+        leverage=2,
+        confidence=0.9,
+        ts_ms=ts,
+        price_info={"mid": 100.0, "last_px": 100.0},
+        llm_model="x",
+    )
+    assert store.count_open() == 1
+    # Opposite recommendation with high confidence would normally close, but switch disables it
+    not_closed = eng.maybe_close_on_inverse_or_tp_sl(
+        symbol="BTCUSDT",
+        recommendation_direction="sell",
+        confidence=0.95,
+        ts_ms=ts + 1000,
+        price_info={"mid": 99.0, "last_px": 99.0},
+    )
+    assert not_closed is None

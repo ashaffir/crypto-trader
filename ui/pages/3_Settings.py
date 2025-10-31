@@ -390,6 +390,16 @@ with tab_trader:
             help="Required increase in confidence to accept reversal closes",
         )
 
+        # Disable inverse-based closing from LLM recommendations
+        inverse_disable = st.toggle(
+            "Disable Inverse (don't close on opposite LLM)",
+            value=bool(cur.get("inverse_close_disabled", False)),
+            help=(
+                "When enabled, opposite LLM signals will NOT auto-close open positions. "
+                "Take-Profit/Stop-Loss and other rules still apply."
+            ),
+        )
+
     with right:
         size = st.number_input(
             "Default Position Size (USD)",
@@ -511,6 +521,7 @@ with tab_trader:
             "trailing_sl_enabled": bool(trailing),
             "tp_disabled": bool(tp_disabled),
             "auto_expire_minutes": int(auto_expire) if int(auto_expire) > 0 else None,
+            "inverse_close_disabled": bool(inverse_disable),
         }
         if save_trader_settings(payload):
             # Save fees separately to avoid clobbering

@@ -31,11 +31,19 @@ def load_trader_settings(base_dir: Optional[str] = None) -> dict:
         "trailing_sl_enabled": False,
         "tp_disabled": False,
         "auto_expire_minutes": None,
+        # UI-facing key to disable LLM inverse-based closes
+        "inverse_close_disabled": False,
     }
     if isinstance(raw, dict):
         for k in list(out.keys()):
             if k in raw:
                 out[k] = raw[k]
+        # Support legacy/alias key 'disable_inverse'
+        if "inverse_close_disabled" not in raw and "disable_inverse" in raw:
+            try:
+                out["inverse_close_disabled"] = bool(raw.get("disable_inverse", False))
+            except Exception:
+                pass
     return out
 
 
