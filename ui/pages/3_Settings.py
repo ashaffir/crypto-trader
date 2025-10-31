@@ -438,7 +438,8 @@ with tab_trader:
             "Stop Loss %",
             min_value=0.0,
             value=float(cur.get("sl_percent", 0.0)),
-            step=0.1,
+            step=0.0001,
+            format="%.4f",
             help="Stop loss trigger in percent (e.g., 0.5 = -0.5%)",
         )
     with sl_col2:
@@ -454,7 +455,8 @@ with tab_trader:
             "Take Profit %",
             min_value=0.0,
             value=float(cur.get("tp_percent", 0.0)),
-            step=0.1,
+            step=0.0001,
+            format="%.4f",
             help="Take profit trigger in percent (e.g., 1.0 = +1%)",
         )
     with tp_col2:
