@@ -30,10 +30,19 @@ async def pipeline() -> None:
 
     # Choose collector based on market mode
     current_market = str(getattr(cfg, "market", "spot")).lower()
+    current_streams: dict[str, object] = dict(vars(cfg.streams))
+    # Sensible defaults: when in futures mode, auto-enable futures streams unless explicitly set
+    if current_market == "futures":
+        if not isinstance(current_streams.get("openInterest"), bool):
+            current_streams["openInterest"] = True
+        if not isinstance(current_streams.get("forceOrder"), bool):
+            current_streams["forceOrder"] = True
+        if not isinstance(current_streams.get("trade"), bool):
+            current_streams["trade"] = True
     collector = (
-        FuturesCollector(current_symbols, vars(cfg.streams), queue)
+        FuturesCollector(current_symbols, current_streams, queue)
         if current_market == "futures"
-        else SpotCollector(current_symbols, vars(cfg.streams), queue)
+        else SpotCollector(current_symbols, current_streams, queue)
     )
     features = FeatureEngine(
         symbols=current_symbols,
@@ -63,6 +72,12 @@ async def pipeline() -> None:
     consensus_clients: dict[str, LLMClient] = {}
     # Mirror (inverse) mode
     mirror_enabled: bool = False
+
+    # ---- Runtime diagnostics (for bot_status.json) ----
+    from collections import defaultdict
+
+    event_counts: dict[str, int] = defaultdict(int)
+    last_event_ts_ms: dict[str, int] = {}
 
     def _apply_llm_timing(overrides: Dict | None) -> None:
         nonlocal llm_window_s, llm_refresh_s
@@ -299,22 +314,68 @@ async def pipeline() -> None:
                             logger.info(
                                 f"Broker switched: mode={exec_settings.mode}, venue={exec_settings.venue}, network={exec_settings.network}"
                             )
-                        # Handle market toggle while in paper mode
+                        # Handle market/streams toggle while in paper mode
                         try:
                             rt_market = str(
-                                (_ovr or {}).get("market") or current_market
+                                ((_ovr or {}).get("market") or current_market)
                             ).lower()
-                            if (
-                                exec_settings.mode != "live"
-                                and rt_market != current_market
+                            # Merge streams overrides if provided
+                            streams_override = {}
+                            try:
+                                so = (_ovr or {}).get("streams")
+                                if isinstance(so, dict):
+                                    streams_override = {
+                                        k: v
+                                        for k, v in so.items()
+                                        if isinstance(v, (bool, int, float, str))
+                                    }
+                            except Exception:
+                                streams_override = {}
+                            new_streams = dict(current_streams)
+                            new_streams.update(streams_override)
+                            # When switching to futures, auto-enable futures streams if not provided
+                            if rt_market == "futures":
+                                if "openInterest" not in new_streams:
+                                    new_streams["openInterest"] = True
+                                if "forceOrder" not in new_streams:
+                                    new_streams["forceOrder"] = True
+                                if "trade" not in new_streams:
+                                    new_streams["trade"] = True
+                            # If market or streams changed, rebuild collector (paper mode only)
+                            if exec_settings.mode != "live" and (
+                                rt_market != current_market
+                                or new_streams != current_streams
                             ):
                                 current_market = rt_market
+                                current_streams = new_streams
+                                # Update paper broker venue
                                 broker = PaperBroker(
                                     position_store, venue=current_market
                                 )
                                 engine.broker = broker
+                                # Restart collector with new market/streams
+                                try:
+                                    await collector.stop()
+                                except Exception:
+                                    pass
+                                try:
+                                    collector_task.cancel()
+                                except Exception:
+                                    pass
+                                collector = (
+                                    FuturesCollector(
+                                        current_symbols, current_streams, queue
+                                    )
+                                    if current_market == "futures"
+                                    else SpotCollector(
+                                        current_symbols, current_streams, queue
+                                    )
+                                )
+                                collector_task = asyncio.create_task(
+                                    collector.run(), name="collector"
+                                )
                                 logger.info(
-                                    f"Paper broker venue updated to {current_market}"
+                                    f"Collector restarted: market={current_market}, streams={current_streams}"
                                 )
                         except Exception:
                             pass
@@ -739,6 +800,15 @@ async def pipeline() -> None:
         last_flush_ts_ms: int | None = None
         while True:
             msg = await queue.get()
+            try:
+                k = str(msg.get("kind") or "")
+                if k:
+                    event_counts[k] += 1
+                    ts = msg.get("ts_ms")
+                    if isinstance(ts, (int, float)):
+                        last_event_ts_ms[k] = int(ts)
+            except Exception:
+                pass
             snap = features.on_message(msg)
             if not snap:
                 queue.task_done()
@@ -789,6 +859,10 @@ async def pipeline() -> None:
                 "status": "running",
                 "queue_size": queue.qsize(),
                 "symbols": current_symbols,
+                "market": current_market,
+                "streams": current_streams,
+                "event_counts": dict(event_counts),
+                "last_events": last_event_ts_ms,
             }
             control.write_status(hb)
 
@@ -814,15 +888,14 @@ async def pipeline() -> None:
                                     collector_task.cancel()
                                 except Exception:
                                     pass
-                                # Recreate collector preserving market mode
-                                market = str(getattr(cfg, "market", "spot")).lower()
+                                # Recreate collector preserving current market and streams (which might be overridden)
                                 collector = (
                                     FuturesCollector(
-                                        current_symbols, vars(cfg.streams), queue
+                                        current_symbols, current_streams, queue
                                     )
-                                    if market == "futures"
+                                    if current_market == "futures"
                                     else SpotCollector(
-                                        current_symbols, vars(cfg.streams), queue
+                                        current_symbols, current_streams, queue
                                     )
                                 )
                                 features = FeatureEngine(

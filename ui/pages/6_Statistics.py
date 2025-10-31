@@ -302,14 +302,33 @@ try:
     else:
         import plotly.express as px
 
+        # Sanitize dtypes for robust plotting and correlation
+        plot_df = corr_df.copy()
+        try:
+            plot_df["window_seconds"] = pd.to_numeric(
+                plot_df["window_seconds"], errors="coerce"
+            )
+            plot_df["pnl"] = pd.to_numeric(plot_df["pnl"], errors="coerce")
+            plot_df = plot_df.dropna(subset=["window_seconds", "pnl"]).copy()
+        except Exception:
+            pass
+
+        # Use OLS trendline only if statsmodels is available
+        try:
+            import statsmodels.api as _sm  # type: ignore  # noqa: F401
+
+            _trend = "ols"
+        except Exception:
+            _trend = None
+
         col_a, col_b = st.columns([3, 2])
         with col_a:
             fig3 = px.scatter(
-                corr_df,
+                plot_df,
                 x="window_seconds",
                 y="pnl",
                 color="llm_model",
-                trendline="ols",
+                trendline=_trend,
                 title=None,
             )
             fig3.update_layout(
@@ -322,7 +341,7 @@ try:
                 fig3, use_container_width=True, config={"displaylogo": False}
             )
         with col_b:
-            summ = summarize_window_pnl_correlation(corr_df)
+            summ = summarize_window_pnl_correlation(plot_df)
             if summ.empty:
                 st.caption("Not enough data for summary.")
             else:

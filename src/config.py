@@ -27,8 +27,17 @@ class Horizons:
 @dataclass
 class Streams:
     aggTrade: bool = True
+    trade: bool = False
     depth_100ms: bool = True
+    # Partial book depths (enable at most one; if multiple true, depth10 takes precedence)
+    depth5_100ms: bool = False
+    depth10_100ms: bool = False
+    depth20_100ms: bool = False
     kline_1s: bool = True
+    # Futures-specific streams
+    fundingRate: bool = False
+    openInterest: bool = False
+    forceOrder: bool = False
 
 
 @dataclass

@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import pandas as pd
 import numpy as np
+import warnings
 
 # Ensure project root on sys.path for `src` imports when running Streamlit from ui/
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -303,14 +304,28 @@ def summarize_window_pnl_correlation(corr_df: pd.DataFrame) -> pd.DataFrame:
             continue
         # Pearson r
         try:
-            r = float(np.corrcoef(x, y)[0, 1])
+            x_std = float(np.std(x))
+            y_std = float(np.std(y))
+            if x_std == 0.0 or y_std == 0.0:
+                r = float("nan")
+            else:
+                r = float(np.corrcoef(x, y)[0, 1])
         except Exception:
             r = float("nan")
         # OLS slope/intercept
         try:
-            slope, intercept = np.polyfit(x, y, 1)
-            slope = float(slope)
-            intercept = float(intercept)
+            # Guard against degenerate x; stabilize by rescaling x to mean 0 / std 1
+            mu = float(np.mean(x))
+            sigma = float(np.std(x))
+            if sigma == 0.0:
+                raise ValueError("degenerate x for polyfit")
+            x_scaled = (x - mu) / sigma
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", np.RankWarning)
+                a_s, b_s = np.polyfit(x_scaled, y, 1)
+            a = float(a_s) / sigma
+            b = float(b_s) - float(a_s) * mu / sigma
+            slope, intercept = a, b
         except Exception:
             slope, intercept = float("nan"), float("nan")
         rows.append(

@@ -39,6 +39,21 @@ class SymbolFeatures:
     last_spread_bps: Optional[float] = None
     # Recent raw snapshots window for LLM summaries
     recent_snapshots: Deque[Dict[str, Any]] = field(default_factory=collections.deque)
+    # Event-derived rolling features
+    depth_events_1s: RollingSeries | None = None
+    cancel_ratio_rs: RollingSeries | None = None
+    orderflow_pressure_rs: RollingSeries | None = None
+    depth_skew_rs: RollingSeries | None = None
+    taker_buy_vol_rs: RollingSeries | None = None
+    taker_sell_vol_rs: RollingSeries | None = None
+    taker_buy_notional_rs: RollingSeries | None = None
+    taker_sell_notional_rs: RollingSeries | None = None
+    basis_rs: RollingSeries | None = None
+    oi_delta_rs: RollingSeries | None = None
+    liq_vol_rs: RollingSeries | None = None
+    # For OI delta computation
+    _last_oi: Optional[float] = None
+    _last_oi_ts: Optional[int] = None
 
 
 class FeatureEngine:
@@ -53,14 +68,26 @@ class FeatureEngine:
         if ma_windows is None:
             ma_windows = [7, 15, 30]
         self.snapshot_window_ms = int(snapshot_window_s) * 1000
-        self.state: Dict[str, SymbolFeatures] = {
-            s: SymbolFeatures(
+        self.state: Dict[str, SymbolFeatures] = {}
+        for s in symbols:
+            st = SymbolFeatures(
                 vol_1s=RollingSeries(window_ms=vol_window_s * 1000),
                 delta_1s=RollingSeries(window_ms=delta_window_s * 1000),
                 ma_values={w: RollingSeries(window_ms=w * 1000) for w in ma_windows},
             )
-            for s in symbols
-        }
+            # Use the snapshot window for derived event features so summarize_window can slice down further
+            st.depth_events_1s = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.cancel_ratio_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.orderflow_pressure_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.depth_skew_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.taker_buy_vol_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.taker_sell_vol_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.taker_buy_notional_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.taker_sell_notional_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.basis_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.oi_delta_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            st.liq_vol_rs = RollingSeries(window_ms=self.snapshot_window_ms)
+            self.state[s] = st
 
     @staticmethod
     def compute_imbalance(
@@ -104,9 +131,113 @@ class FeatureEngine:
             best_ask = msg.get("best_ask")
             st.last_best_bid = best_bid
             st.last_best_ask = best_ask
+            # Depth-derived metrics
+            num_changes = int(msg.get("num_changes") or 0)
+            num_cancels = int(msg.get("num_cancels") or 0)
+            bid_add = float(msg.get("bid_add") or 0.0)
+            bid_remove = float(msg.get("bid_remove") or 0.0)
+            ask_add = float(msg.get("ask_add") or 0.0)
+            ask_remove = float(msg.get("ask_remove") or 0.0)
+            size_best_bid = msg.get("size_best_bid")
+            size_best_ask = msg.get("size_best_ask")
+
+            # update rate: count one event
+            if st.depth_events_1s is not None:
+                st.depth_events_1s.add(ts_ms, 1.0)
+            # cancel intensity per event
+            cancel_ratio = (num_cancels / num_changes) if num_changes > 0 else 0.0
+            if st.cancel_ratio_rs is not None:
+                st.cancel_ratio_rs.add(ts_ms, float(cancel_ratio))
+            # orderflow pressure per event
+            # additions on bid and removals on ask push up; additions on ask and removals on bid push down
+            pos = bid_add + ask_remove
+            neg = ask_add + bid_remove
+            denom = pos + neg
+            of_pressure = (pos - neg) / denom if denom > 0 else 0.0
+            if st.orderflow_pressure_rs is not None:
+                st.orderflow_pressure_rs.add(ts_ms, float(of_pressure))
+            # depth skew using best level sizes if present
+            skew = None
+            try:
+                if size_best_bid is not None and size_best_ask is not None:
+                    total = float(size_best_bid) + float(size_best_ask)
+                    skew = ((float(size_best_bid) - float(size_best_ask)) / total) if total > 0 else 0.0
+            except Exception:
+                skew = None
+            if skew is not None and st.depth_skew_rs is not None:
+                st.depth_skew_rs.add(ts_ms, float(skew))
         elif kind == "aggTrade":
             last_px = msg.get("price")
             last_qty = msg.get("qty")
+            # taker side: if buyer is maker -> taker is seller
+            taker_is_buy = not bool(msg.get("is_buyer_maker", False))
+            if last_qty is not None:
+                if taker_is_buy and st.taker_buy_vol_rs is not None:
+                    st.taker_buy_vol_rs.add(ts_ms, float(last_qty))
+                elif not taker_is_buy and st.taker_sell_vol_rs is not None:
+                    st.taker_sell_vol_rs.add(ts_ms, float(last_qty))
+            # Notional flow and basis
+            try:
+                px_for_calc = last_px if last_px is not None else st.last_mid
+                if px_for_calc is not None and last_qty is not None:
+                    notional = float(px_for_calc) * float(last_qty)
+                    if taker_is_buy and st.taker_buy_notional_rs is not None:
+                        st.taker_buy_notional_rs.add(ts_ms, notional)
+                    elif not taker_is_buy and st.taker_sell_notional_rs is not None:
+                        st.taker_sell_notional_rs.add(ts_ms, notional)
+                # Basis = trade price - mid
+                if last_px is not None and st.last_mid is not None and st.basis_rs is not None:
+                    st.basis_rs.add(ts_ms, float(last_px) - float(st.last_mid))
+            except Exception:
+                pass
+        elif kind == "trade":
+            last_px = msg.get("price")
+            last_qty = msg.get("qty")
+            taker_is_buy = not bool(msg.get("is_buyer_maker", False))
+            if last_qty is not None:
+                if taker_is_buy and st.taker_buy_vol_rs is not None:
+                    st.taker_buy_vol_rs.add(ts_ms, float(last_qty))
+                elif not taker_is_buy and st.taker_sell_vol_rs is not None:
+                    st.taker_sell_vol_rs.add(ts_ms, float(last_qty))
+            # Notional flow and basis
+            try:
+                px_for_calc = last_px if last_px is not None else st.last_mid
+                if px_for_calc is not None and last_qty is not None:
+                    notional = float(px_for_calc) * float(last_qty)
+                    if taker_is_buy and st.taker_buy_notional_rs is not None:
+                        st.taker_buy_notional_rs.add(ts_ms, notional)
+                    elif not taker_is_buy and st.taker_sell_notional_rs is not None:
+                        st.taker_sell_notional_rs.add(ts_ms, notional)
+                if last_px is not None and st.last_mid is not None and st.basis_rs is not None:
+                    st.basis_rs.add(ts_ms, float(last_px) - float(st.last_mid))
+            except Exception:
+                pass
+        elif kind == "openInterest":
+            oi = msg.get("open_interest")
+            if isinstance(oi, (int, float)):
+                prev = st._last_oi
+                prev_ts = st._last_oi_ts
+                if prev is not None and prev_ts is not None and ts_ms is not None:
+                    dt_s = max(0.0, (ts_ms - prev_ts) / 1000.0)
+                    if dt_s > 0:
+                        delta_per_s = (float(oi) - float(prev)) / dt_s
+                        if st.oi_delta_rs is not None:
+                            st.oi_delta_rs.add(ts_ms, delta_per_s)
+                st._last_oi = float(oi)
+                st._last_oi_ts = ts_ms
+        elif kind == "forceOrder":
+            price = msg.get("price")
+            qty = msg.get("qty")
+            val = None
+            try:
+                if price is not None and qty is not None:
+                    val = float(price) * float(qty)
+                elif qty is not None:
+                    val = float(qty)
+            except Exception:
+                val = None
+            if val is not None and st.liq_vol_rs is not None:
+                st.liq_vol_rs.add(ts_ms, float(val))
         elif kind == "kline":
             pass
 
@@ -154,6 +285,17 @@ class FeatureEngine:
             "spread_bps": spread_bps,
             "vol_1s": vol_1s,
             "delta_1s": delta_1s,
+            # Event-level derived metrics (may be None for non-applicable events)
+            "orderflow_pressure_event": of_pressure if 'of_pressure' in locals() else None,
+            "cancel_ratio_event": cancel_ratio if 'cancel_ratio' in locals() else None,
+            "depth_skew_event": skew if 'skew' in locals() else None,
+            "taker_buy_event": float(last_qty) if kind in ("aggTrade", "trade") and 'taker_is_buy' in locals() and taker_is_buy and last_qty is not None else None,
+            "taker_sell_event": float(last_qty) if kind in ("aggTrade", "trade") and 'taker_is_buy' in locals() and (not taker_is_buy) and last_qty is not None else None,
+            "taker_buy_notional_event": (float(last_px) * float(last_qty)) if kind in ("aggTrade", "trade") and 'taker_is_buy' in locals() and taker_is_buy and last_px is not None and last_qty is not None else None,
+            "taker_sell_notional_event": (float(last_px) * float(last_qty)) if kind in ("aggTrade", "trade") and 'taker_is_buy' in locals() and (not taker_is_buy) and last_px is not None and last_qty is not None else None,
+            "basis_event": (float(last_px) - float(st.last_mid)) if kind in ("aggTrade", "trade") and last_px is not None and st.last_mid is not None else None,
+            "oi_delta_event": (st.oi_delta_rs.values[-1][1] if st.oi_delta_rs and st.oi_delta_rs.values else None),
+            "liq_volume_event": (st.liq_vol_rs.values[-1][1] if st.liq_vol_rs and st.liq_vol_rs.values else None),
         }
         # Store in recent window
         st.recent_snapshots.append(snapshot)
@@ -197,6 +339,51 @@ class FeatureEngine:
             r.get("ob_imbalance") for r in rows if r.get("ob_imbalance") is not None
         ]
         vols = [r.get("last_qty") for r in rows if r.get("last_qty") is not None]
+        of_pressures = [
+            r.get("orderflow_pressure_event")
+            for r in rows
+            if r.get("orderflow_pressure_event") is not None
+        ]
+        depth_skews = [
+            r.get("depth_skew_event")
+            for r in rows
+            if r.get("depth_skew_event") is not None
+        ]
+        cancel_ratios = [
+            r.get("cancel_ratio_event")
+            for r in rows
+            if r.get("cancel_ratio_event") is not None
+        ]
+        taker_buys = [
+            r.get("taker_buy_event") for r in rows if r.get("taker_buy_event") is not None
+        ]
+        taker_sells = [
+            r.get("taker_sell_event") for r in rows if r.get("taker_sell_event") is not None
+        ]
+        oi_deltas = [
+            r.get("oi_delta_event") for r in rows if r.get("oi_delta_event") is not None
+        ]
+        liq_vols = [
+            r.get("liq_volume_event")
+            for r in rows
+            if r.get("liq_volume_event") is not None
+        ]
+        buy_notional = [
+            r.get("taker_buy_notional_event")
+            for r in rows
+            if r.get("taker_buy_notional_event") is not None
+        ]
+        sell_notional = [
+            r.get("taker_sell_notional_event")
+            for r in rows
+            if r.get("taker_sell_notional_event") is not None
+        ]
+        basis_vals = [
+            r.get("basis_event") for r in rows if r.get("basis_event") is not None
+        ]
+        basis_ts = [
+            r.get("ts_ms") for r in rows if r.get("basis_event") is not None and r.get("ts_ms") is not None
+        ]
 
         def _mean(vals: List[float]) -> Optional[float]:
             return sum(vals) / len(vals) if vals else None
@@ -250,6 +437,43 @@ class FeatureEngine:
             "spike_score": _spike_score(vols),
         }
 
+        # Additional features
+        trade_buy = sum(taker_buys) if taker_buys else 0.0
+        trade_sell = sum(taker_sells) if taker_sells else 0.0
+        trade_den = trade_buy + trade_sell
+        trade_aggr = (trade_buy / trade_den) if trade_den > 0 else None
+
+        # ---- Synthetic OI delta estimate ----
+        # 1) Net taker notional flow (dimensionless in [-1,1])
+        net_notional = (sum(buy_notional) if buy_notional else 0.0) - (
+            sum(sell_notional) if sell_notional else 0.0
+        )
+        tot_notional = (sum(buy_notional) if buy_notional else 0.0) + (
+            sum(sell_notional) if sell_notional else 0.0
+        )
+        norm_net_notional = (net_notional / tot_notional) if tot_notional > 0 else 0.0
+
+        # 2) Depth persistence proxy (high when cancels are low)
+        mean_cancel = _mean(cancel_ratios) if cancel_ratios else None
+        persistence = max(0.0, 1.0 - float(mean_cancel)) if mean_cancel is not None else 0.0
+
+        # 3) Short-term basis change (slope of trade-mid difference per second, normalized by mid mean)
+        basis_slope = _slope_over_time(basis_vals, basis_ts) if basis_vals and basis_ts else None
+        mid_mean = mid_stats.get("mean")
+        basis_rel = (float(basis_slope) / float(mid_mean)) if (basis_slope is not None and mid_mean) else 0.0
+
+        # Combine components (heuristic weights)
+        alpha, beta, gamma = 0.6, 0.3, 0.1
+        oi_delta_est = (alpha * norm_net_notional) + (beta * (float(_mean(of_pressures)) if of_pressures else 0.0) * persistence) + (gamma * basis_rel)
+        # Clamp to [-1, 1]
+        if oi_delta_est > 1.0:
+            oi_delta_est = 1.0
+        elif oi_delta_est < -1.0:
+            oi_delta_est = -1.0
+
+        # liquidation_burst strictly from forceOrder events: explicit 0.0 when none
+        liq_burst = 0.0 if not liq_vols else _spike_score(liq_vols)
+
         return {
             "symbol": symbol,
             "count": len(rows),
@@ -257,4 +481,11 @@ class FeatureEngine:
             "spread_bps": spread_stats,
             "ob_imbalance": imb_stats,
             "volume": vol_stats,
+            # New compact features for LLM
+            "orderflow_pressure": _mean(of_pressures) if of_pressures else None,
+            "depth_skew": _mean(depth_skews) if depth_skews else None,
+            "cancel_intensity": _mean(cancel_ratios) if cancel_ratios else None,
+            "trade_aggression": trade_aggr,
+            "oi_delta": oi_delta_est,
+            "liquidation_burst": liq_burst,
         }
