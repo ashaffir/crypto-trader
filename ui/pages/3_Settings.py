@@ -27,6 +27,8 @@ from ui.lib.settings_state import (
     save_market_mode,
     load_execution_settings,
     save_execution_settings,
+    load_deterministic_settings,
+    save_deterministic_settings,
 )
 from ui.lib.logbook_utils import read_latest_file
 from ui.lib.common import LOGBOOK_DIR
@@ -49,12 +51,13 @@ render_status_badge(st)
 st.subheader("Settings")
 
 # Tabs: first = Tracked Symbols, last = Market Mode
-tab_symbols, tab_llm, tab_execution, tab_trader, tab_tiny, tab_market = st.tabs(
+tab_symbols, tab_llm, tab_execution, tab_trader, tab_deterministic, tab_tiny, tab_market = st.tabs(
     [
         "Tracked Symbols",
         "LLM",
         "Execution",
         "Trader",
+        "Deterministic",
         "Tiny Order",
         "Market Mode",
     ]
@@ -543,6 +546,35 @@ with tab_trader:
         else:
             st.error("Failed to save trader settings")
 
+
+# ---- Deterministic (tab) ----
+with tab_deterministic:
+    st.markdown("**Deterministic Engine Settings**")
+    cur = load_deterministic_settings()
+    st.caption(
+        "The cost multiplier k scales the threshold θ = k × cost_bps/1e4. Lower k reduces the edge required to trade; higher k is more conservative."
+    )
+    k_val = st.number_input(
+        "k (cost multiplier)",
+        min_value=0.0,
+        max_value=10.0,
+        value=float(cur.get("k_cost_mult", 1.2)),
+        step=0.1,
+        help="Typical range 0.5–2.0. Default 1.2.",
+    )
+    det_enabled = st.toggle(
+        "Enable deterministic mode",
+        value=bool(cur.get("enabled", False)),
+        help="When enabled, the bot uses the deterministic engine instead of the LLM.",
+    )
+    if st.button("Save Deterministic Settings"):
+        ok = save_deterministic_settings(
+            {"k_cost_mult": float(k_val), "enabled": bool(det_enabled)}
+        )
+        if ok:
+            st.success("✓ Deterministic settings saved")
+        else:
+            st.error("Failed to save deterministic settings")
 
 # ---- Execution (tab) ----
 with tab_execution:

@@ -474,6 +474,8 @@ __all__ = [
     # Deterministic mode helpers
     "load_deterministic_mode",
     "save_deterministic_mode",
+    "load_deterministic_settings",
+    "save_deterministic_settings",
 ]
 
 # ---- Market mode (spot/futures) helpers ----
@@ -581,6 +583,42 @@ def save_deterministic_mode(enabled: bool, base_dir: Optional[str] = None) -> bo
     merged = dict(cfg or {})
     det = dict((merged.get("deterministic") or {}))
     det["enabled"] = bool(enabled)
+    merged["deterministic"] = det
+    return _safe_write_json(path, merged)
+
+
+def load_deterministic_settings(base_dir: Optional[str] = None) -> dict:
+    """Load settings under top-level 'deterministic'. Defaults: enabled=False, k_cost_mult=1.2."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path) or {}
+    det = cfg.get("deterministic") if isinstance(cfg, dict) else None
+    out = {"enabled": False, "k_cost_mult": 1.2}
+    if isinstance(det, dict):
+        if "enabled" in det:
+            out["enabled"] = bool(det.get("enabled", False))
+        try:
+            k = det.get("k_cost_mult")
+            if k is not None and k != "":
+                out["k_cost_mult"] = float(k)
+        except Exception:
+            pass
+    return out
+
+
+def save_deterministic_settings(settings: dict, base_dir: Optional[str] = None) -> bool:
+    """Persist deterministic settings (merge). Supported keys: enabled, k_cost_mult."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    det = dict((merged.get("deterministic") or {}))
+    if isinstance(settings, dict):
+        if "enabled" in settings:
+            det["enabled"] = bool(settings.get("enabled"))
+        if settings.get("k_cost_mult") not in (None, ""):
+            try:
+                det["k_cost_mult"] = float(settings.get("k_cost_mult"))
+            except Exception:
+                pass
     merged["deterministic"] = det
     return _safe_write_json(path, merged)
 

@@ -65,7 +65,7 @@ async def pipeline() -> None:
 
     # ---- Deterministic Signal Engine ----
     det_engine = DeterministicSignalEngine(
-        symbols=current_symbols, alpha=0.02, lam=1e-3, horizon_s=45
+        symbols=current_symbols, alpha=0.02, lam=1e-3, horizon_s=45, k_cost_mult=1.2
     )
 
     # ---- LLM Recommender State ----
@@ -827,7 +827,17 @@ async def pipeline() -> None:
                     # enable flag
                     try:
                         det = (_ovr or {}).get("deterministic") if isinstance(_ovr, dict) else None
-                        deterministic_enabled = bool((det or {}).get("enabled", False)) if isinstance(det, dict) else False
+                        if isinstance(det, dict):
+                            deterministic_enabled = bool(det.get("enabled", False))
+                            # live-update k multiplier
+                            k_val = det.get("k_cost_mult")
+                            if k_val not in (None, ""):
+                                try:
+                                    det_engine.k_cost_mult = float(k_val)
+                                except Exception:
+                                    pass
+                        else:
+                            deterministic_enabled = False
                     except Exception:
                         pass
                 except Exception:
