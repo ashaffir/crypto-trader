@@ -13,6 +13,8 @@ from src.logger import ParquetLogbook
 from src.control import Control
 from src.runtime_config import RuntimeConfigManager
 from src.utils.llm_client import LLMClient, LLMConfig
+from src.deterministic import DeterministicSignalEngine
+from src.utils.fees import get_fee_rate
 from src.positions import PositionStore
 from src.trading import TradingEngine, TraderSettings, load_trader_settings
 from src.broker import ExecutionSettings, PaperBroker, BinanceBrokerSkeleton
@@ -61,6 +63,11 @@ async def pipeline() -> None:
     broker = PaperBroker(position_store, venue=current_market)
     engine = TradingEngine(position_store, TraderSettings(), broker)
 
+    # ---- Deterministic Signal Engine ----
+    det_engine = DeterministicSignalEngine(
+        symbols=current_symbols, alpha=0.02, lam=1e-3, horizon_s=45
+    )
+
     # ---- LLM Recommender State ----
     llm_client: LLMClient | None = None  # single-LLM mode
     llm_active_name: str | None = None
@@ -72,6 +79,7 @@ async def pipeline() -> None:
     consensus_clients: dict[str, LLMClient] = {}
     # Mirror (inverse) mode
     mirror_enabled: bool = False
+    deterministic_enabled: bool = False
 
     # ---- Runtime diagnostics (for bot_status.json) ----
     from collections import defaultdict
@@ -88,6 +96,14 @@ async def pipeline() -> None:
             return
         try:
             llm_window_s = int(llm.get("window_seconds", llm_window_s) or llm_window_s)
+        except Exception:
+            pass
+        # Deterministic enable flag
+        try:
+            det = overrides.get("deterministic") if isinstance(overrides, dict) else None
+            if isinstance(det, dict):
+                nonlocal deterministic_enabled
+                deterministic_enabled = bool(det.get("enabled", False))
         except Exception:
             pass
         try:
@@ -383,6 +399,10 @@ async def pipeline() -> None:
                         pass
                 except Exception:
                     pass
+                # If deterministic mode is enabled, skip LLM decisions this cycle
+                if deterministic_enabled:
+                    await asyncio.sleep(max(1, int(llm_refresh_s)))
+                    continue
                 # Aggregate per-symbol summaries and query LLM once per refresh
                 summaries = []
                 for sym in current_symbols:
@@ -795,6 +815,200 @@ async def pipeline() -> None:
             finally:
                 await asyncio.sleep(max(1, int(llm_refresh_s)))
 
+    async def deterministic_loop() -> None:
+        nonlocal llm_window_s, llm_refresh_s, mirror_enabled, deterministic_enabled
+        while True:
+            try:
+                # Refresh runtime overrides and trader settings
+                try:
+                    _changed, _ovr = runtime_cfg.load_if_changed()
+                    settings = load_trader_settings(_ovr)
+                    engine.update_settings(settings)
+                    # enable flag
+                    try:
+                        det = (_ovr or {}).get("deterministic") if isinstance(_ovr, dict) else None
+                        deterministic_enabled = bool((det or {}).get("enabled", False)) if isinstance(det, dict) else False
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                if not deterministic_enabled:
+                    await asyncio.sleep(max(1, int(llm_refresh_s)))
+                    continue
+
+                # Build summaries and score
+                summaries = []
+                for sym in current_symbols:
+                    summary = features.summarize_window(sym, window_s=llm_window_s)
+                    if summary and summary.get("count", 0) > 0:
+                        # Attach last mid for return calc
+                        try:
+                            last_mid = features.state.get(sym).last_mid  # type: ignore[attr-defined]
+                        except Exception:
+                            last_mid = None
+                        summary["__last_mid__"] = last_mid
+                        summaries.append(summary)
+
+                if not summaries:
+                    await asyncio.sleep(max(1, int(llm_refresh_s)))
+                    continue
+
+                now_ms = int(__import__("time").time() * 1000)
+
+                # Compute fee rate roundtrip in bps using trader settings
+                try:
+                    s = engine.settings
+                    fee_rate = get_fee_rate(
+                        market=s.fee_market, vip_tier=s.fee_vip_tier, liquidity=s.fee_liquidity, bnb_discount=s.fee_bnb_discount
+                    )
+                    fees_bps_roundtrip = 2.0 * float(fee_rate) * 1e4
+                except Exception:
+                    fees_bps_roundtrip = 0.0
+
+                for summary in summaries:
+                    try:
+                        sym = str(summary.get("symbol") or "").upper()
+                        last_mid = summary.get("__last_mid__")
+                        rec = det_engine.update_and_score(
+                            symbol=sym,
+                            summary=summary,
+                            ts_ms=now_ms,
+                            last_mid=float(last_mid) if last_mid is not None else None,
+                            fee_rate_bps_roundtrip=float(fees_bps_roundtrip),
+                        )
+                        if not isinstance(rec, dict):
+                            continue
+                        direction = str(rec.get("direction"))
+                        leverage = int(rec.get("leverage") or 1)
+                        confidence = float(rec.get("confidence") or 0.0)
+                        score = rec.get("score")
+                        prob = rec.get("prob")
+                        actionable = bool(rec.get("actionable", False))
+
+                        # Always emit a diagnostic JSON line so it's visible that the engine is running
+                        try:
+                            import json as _json
+
+                            logger.info(
+                                _json.dumps(
+                                    {
+                                        "engine": "deterministic",
+                                        "ts_ms": now_ms,
+                                        "symbol": sym,
+                                        "direction": direction,
+                                        "leverage": leverage,
+                                        "confidence": round(float(confidence), 4),
+                                        "prob": round(float(prob or 0.0), 4),
+                                        "score": float(score or 0.0),
+                                        "theta": float(rec.get("theta", 0.0)),
+                                        "cost_bps": float(rec.get("cost_bps", 0.0)),
+                                        "warmup": bool(rec.get("warmup", False)),
+                                        "actionable": actionable,
+                                    },
+                                    separators=(", ", ": "),
+                                )
+                            )
+                        except Exception:
+                            pass
+
+                        # Price info for TP/SL decisions
+                        price_info = None
+                        try:
+                            mid_val = None
+                            mid_field = summary.get("mid")
+                            if isinstance(mid_field, dict):
+                                mid_val = mid_field.get("mean") or mid_field.get("max") or mid_field.get("min")
+                            if mid_val is not None:
+                                price_info = {"mid": mid_val, "last_px": None}
+                        except Exception:
+                            price_info = None
+
+                        # Only proceed when the engine yields a concrete direction
+                        if direction in ("buy", "sell"):
+                            # Enforce per-direction confidence threshold before logging/acting
+                            try:
+                                conf_thr = (
+                                    float(engine.settings.long_confidence_threshold)
+                                    if direction == "buy"
+                                    else float(engine.settings.short_confidence_threshold)
+                                )
+                            except Exception:
+                                conf_thr = 0.8
+                            if confidence is None or float(confidence) < float(conf_thr):
+                                # Below confidence threshold → skip (match LLM behavior)
+                                try:
+                                    logger.debug(
+                                        f"Deterministic skip: conf {confidence:.3f} < thr {conf_thr:.3f}; score={float(score):.6g} theta={float(rec.get('theta', 0.0)):.6g} warmup={bool(rec.get('warmup', False))}"
+                                    )
+                                except Exception:
+                                    pass
+                                continue
+
+                            # Log exactly like LLM output (pretty JSON object)
+                            try:
+                                import json as _json
+
+                                logger.info(
+                                    _json.dumps(
+                                        [
+                                            {
+                                                "asset": sym,
+                                                "direction": direction,
+                                                "leverage": leverage,
+                                                "confidence": round(float(confidence), 2),
+                                            }
+                                        ],
+                                        indent=2,
+                                    )
+                                )
+                            except Exception:
+                                pass
+
+                            # Apply trade actions; actionable flag also guards weak-score cases
+                            if not actionable:
+                                # If score was not above cost-aware threshold, skip execution
+                                try:
+                                    logger.debug(
+                                        f"Deterministic below theta: score={float(score):.6g} < theta={float(rec.get('theta', 0.0)):.6g}; cost_bps={float(rec.get('cost_bps', 0.0)):.3f}; warmup={bool(rec.get('warmup', False))}"
+                                    )
+                                except Exception:
+                                    pass
+                                continue
+                            # Close inverse or TP/SL first
+                            _close_rec_dir = (
+                                ("sell" if direction == "buy" else "buy") if mirror_enabled else direction
+                            )
+                            engine.maybe_close_on_inverse_or_tp_sl(
+                                symbol=sym,
+                                recommendation_direction=_close_rec_dir,
+                                confidence=confidence,
+                                ts_ms=now_ms,
+                                price_info=price_info,
+                            )
+
+                            # Try to open
+                            _exec_dir = (
+                                ("sell" if direction == "buy" else "buy") if mirror_enabled else direction
+                            )
+                            engine.maybe_open_from_recommendation(
+                                symbol=sym,
+                                direction=_exec_dir,
+                                leverage=leverage,
+                                confidence=confidence,
+                                ts_ms=now_ms,
+                                price_info=price_info,
+                                llm_model="deterministic",
+                                llm_window_s=llm_window_s,
+                            )
+                    except Exception:
+                        # Never break on one symbol
+                        pass
+            except Exception as e:
+                logger.warning(f"Deterministic loop error: {e}")
+            finally:
+                await asyncio.sleep(max(1, int(llm_refresh_s)))
+
     async def consumer() -> None:
         batch_snapshots: list[Dict] = []
         last_flush_ts_ms: int | None = None
@@ -850,6 +1064,7 @@ async def pipeline() -> None:
     tasks = [
         asyncio.create_task(consumer(), name="consumer"),
         asyncio.create_task(llm_loop(), name="llm"),
+        asyncio.create_task(deterministic_loop(), name="deterministic"),
     ]
 
     try:

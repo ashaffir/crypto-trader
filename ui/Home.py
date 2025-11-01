@@ -19,6 +19,8 @@ from ui.lib.settings_state import (
     load_llm_configs,
     load_mirror_mode,
     save_mirror_mode,
+    load_deterministic_mode,
+    save_deterministic_mode,
 )
 
 
@@ -226,7 +228,7 @@ try:
                 else:
                     st.error("Failed to save consensus members")
 
-    # Right: Mirror mode toggle
+    # Right: Mirror and Deterministic mode toggles
     with col_right:
         try:
             mirror_current = bool(load_mirror_mode())
@@ -244,6 +246,24 @@ try:
                 st.toast("Mirror mode updated")
             else:
                 st.error("Failed to update mirror mode")
+
+        # Deterministic mode toggle
+        try:
+            det_current = bool(load_deterministic_mode())
+        except Exception:
+            det_current = False
+        det_new = st.toggle(
+            "Deterministic mode",
+            value=det_current,
+            help="When enabled, use the deterministic engine (no LLM) to compute direction, leverage and confidence.",
+            key="deterministic_mode_enabled",
+        )
+        if det_new != det_current:
+            ok = save_deterministic_mode(bool(det_new))
+            if ok:
+                st.toast("Deterministic mode updated")
+            else:
+                st.error("Failed to update deterministic mode")
 except Exception as e:
     st.warning(f"Consensus controls unavailable: {e}")
 

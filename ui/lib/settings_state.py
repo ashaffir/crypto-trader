@@ -471,6 +471,9 @@ __all__ = [
     # Positions helpers
     "load_positions_settings",
     "save_positions_settings",
+    # Deterministic mode helpers
+    "load_deterministic_mode",
+    "save_deterministic_mode",
 ]
 
 # ---- Market mode (spot/futures) helpers ----
@@ -554,6 +557,31 @@ def save_mirror_mode(enabled: bool, base_dir: Optional[str] = None) -> bool:
     llm = dict((merged.get("llm") or {}))
     llm["mirror_mode"] = bool(enabled)
     merged["llm"] = llm
+    return _safe_write_json(path, merged)
+
+
+# ---- Deterministic mode (LLM alternative) ----
+
+
+def load_deterministic_mode(base_dir: Optional[str] = None) -> bool:
+    """Return boolean flag stored at deterministic.enabled (default False)."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path) or {}
+    try:
+        det = cfg.get("deterministic") if isinstance(cfg, dict) else None
+        return bool((det or {}).get("enabled", False)) if isinstance(det, dict) else False
+    except Exception:
+        return False
+
+
+def save_deterministic_mode(enabled: bool, base_dir: Optional[str] = None) -> bool:
+    """Persist boolean flag under top-level 'deterministic.enabled'."""
+    path = _runtime_file(base_dir)
+    cfg = _safe_read_json(path)
+    merged = dict(cfg or {})
+    det = dict((merged.get("deterministic") or {}))
+    det["enabled"] = bool(enabled)
+    merged["deterministic"] = det
     return _safe_write_json(path, merged)
 
 
