@@ -9,14 +9,63 @@ Concise user manual for running the bot, UI, and live execution.
 ## Start services
 1) Bot (data + engine):
 ```bash
+# Option A: recommended helper (foreground)
+./manage.sh dev bot
+
+# Option B: direct Python (foreground)
 export PYTHONPATH=$(pwd)
-python -m src.app
+python -m src.supervisor
 ```
 
 2) UI (in a new terminal):
 ```bash
+# Option A: recommended helper
+./manage.sh dev ui --port 8501
+
+# Option B: direct Streamlit
 export PYTHONPATH=$(pwd)
-streamlit run ui/Home.py
+streamlit run ui/Home.py --server.port=8501 --server.address=0.0.0.0
+```
+
+## Bot lifecycle (start, restart, stop)
+
+Local (foreground processes):
+```bash
+# Start bot (foreground)
+./manage.sh dev bot
+
+# Restart bot (Ctrl-C to stop, then start again)
+#   Press Ctrl-C to stop the running bot
+./manage.sh dev bot
+
+# Stop bot (foreground)
+#   Press Ctrl-C in the terminal where the bot is running
+```
+
+Docker (background services):
+```bash
+# Start all services in background
+./manage.sh up
+
+# Start in foreground (stream logs in terminal)
+./manage.sh up fg
+
+# Restart only the bot service
+./manage.sh restart bot
+
+# Stop all services
+./manage.sh down
+
+# View logs (last 100 lines; follow with -f)
+./manage.sh logs bot -f
+```
+
+Alternative with docker compose directly:
+```bash
+docker compose up -d            # start in background
+docker compose restart bot      # restart bot only
+docker compose logs -f bot      # follow bot logs
+docker compose down             # stop all
 ```
 
 ## Configure in the UI

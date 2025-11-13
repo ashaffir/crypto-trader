@@ -1,0 +1,6 @@
+ccxt 
+pandas 
+pandas_ta 
+lightgbm 
+pyarrow 
+websockets
