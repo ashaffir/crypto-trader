@@ -127,6 +127,48 @@ def kline_to_row(msg: dict) -> Tuple[pd.Timestamp, float, float, float, float, f
     v = float(k["v"])
     return ts, o, h, l, c, v
 
+def preload_history(
+    config: LiveConfig,
+    window: Deque[Tuple[pd.Timestamp, float, float, float, float, float]],
+    logger: logging.Logger,
+    max_candles: int | None = None,
+) -> float | None:
+    """
+    Preload recent candles from Binance REST (via ccxt) into `window`.
+
+    Returns last close price (for initial PnL reference), or None on failure.
+    """
+    import ccxt  # type: ignore[import]
+
+    if max_candles is None:
+        max_candles = config.min_history
+
+    symbol_ccxt = config.symbol.upper().replace("USDT", "/USDT")
+
+    ex = ccxt.binance({"enableRateLimit": True})
+
+    logger.info(f"Preloading last {max_candles} candles for {symbol_ccxt} {config.interval}...")
+    try:
+        ohlcv = ex.fetch_ohlcv(
+            symbol_ccxt,
+            timeframe=config.interval,
+            limit=max_candles,
+        )
+    except Exception as e:
+        logger.error(f"Failed to preload history: {e}")
+        return None
+
+    window.clear()
+
+    last_close: float | None = None
+    for ts_ms, o, h, l, c, v in ohlcv:
+        ts = pd.to_datetime(ts_ms, unit="ms", utc=True)
+        window.append((ts, float(o), float(h), float(l), float(c), float(v)))
+        last_close = float(c)
+
+    logger.info(f"Preloaded {len(window)} candles, last ts={window[-1][0]} close={last_close}")
+    return last_close
+
 
 async def run_live__(config: LiveConfig) -> None:
     import websockets  # type: ignore[import]
@@ -256,6 +298,9 @@ async def run_live_once(config: LiveConfig, logger: logging.Logger) -> None:
     last_heartbeat = time.time()
 
     logger.info(f"Connecting to {url} ...")
+
+    last_price = preload_history(config, window, logger)
+
     async with websockets.connect(url) as ws:
         logger.info("Connected. Waiting for closed klines...")
         async for message in ws:
