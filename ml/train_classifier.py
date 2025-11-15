@@ -72,6 +72,7 @@ def train_lightgbm_classifier(
         "bagging_freq": 5,
         "min_data_in_leaf": 50,
         "verbose": -1,
+        "class_weight": {0: 1.0, 1: 3.0, 2: 1.0},
     }
 
     print("Training LightGBM classifier...")
