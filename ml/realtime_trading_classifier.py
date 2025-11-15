@@ -214,24 +214,25 @@ def load_model_and_features(config: LiveConfig) -> Tuple[lgb.Booster, List[str]]
 def proba_policy(
     proba: np.ndarray,
     p_threshold: float,
+    p_down_threshold: float,
     max_leverage: float,
 ) -> float:
     """
-    proba = [P(down), P(flat), P(up)]
-    if max(P(up), P(down)) < p_threshold -> no trade
-    else go long/short with max_leverage in direction of higher prob
+    Asymmetric thresholds:
+
+      - go long if P(up)   > P(down) and P(up)   > p_up_threshold
+      - go short if P(down) > P(up)   and P(down) > p_down_threshold
+      - otherwise HOLD
     """
     p_down = float(proba[0])
     p_flat = float(proba[1])
     p_up = float(proba[2])
 
-    best_p = max(p_up, p_down)
-    if best_p < p_threshold:
-        return 0.0
-
-    if p_up > p_down:
+    if p_up > p_down and p_up > p_threshold:
         return max_leverage
-    return -max_leverage
+    if p_down > p_up and p_down > p_down_threshold:
+        return -max_leverage
+    return 0.0
 
 
 def kline_to_row(msg: dict) -> Tuple[pd.Timestamp, float, float, float, float, float]:
