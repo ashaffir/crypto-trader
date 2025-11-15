@@ -136,7 +136,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def create_supervised(
     df: pd.DataFrame,
     horizon: int = 15,
-    thr: float = 0.0003,
+    thr: float = 0.0007,
 ) -> pd.DataFrame:
     """
     Create supervised dataset for *direction* prediction.
