@@ -27,7 +27,9 @@ class LiveConfig:
     model_path: Path = Path("models/lightgbm_direction_btcusdt_1m.txt")
     features_path: Path = Path("models/lightgbm_direction_btcusdt_1m.features.txt")
 
-    p_threshold: float = 0.50
+    p_threshold: float = 0.48  # long threshold (P(up))
+    p_down_threshold: float = 0.50  # short threshold (P(down))
+
     max_leverage: float = 3.0
     horizon_minutes: int = 15
 
@@ -255,7 +257,12 @@ async def run_live_once(config: LiveConfig, logger: logging.Logger) -> None:
                 f"(down={proba[0]:.3f}, flat={proba[1]:.3f}, up={proba[2]:.3f})"
             )
 
-            raw_pos = proba_policy(proba, config.p_threshold, config.max_leverage)
+            raw_pos = proba_policy(
+                proba,
+                config.p_threshold,
+                config.p_down_threshold,
+                config.max_leverage,
+            )
             pos = raw_pos
 
             close_price = float(last_row["close"])
