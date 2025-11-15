@@ -45,7 +45,7 @@ def train_lightgbm_classifier(
     y: pd.Series,
     model_output: Path,
 ) -> None:
-    # Map labels {-1, 0, 1} → {0, 1, 2} for multiclass
+    # Map labels {-1, 0, 1} → {0, 1, 2}
     label_map = {-1: 0, 0: 1, 1: 2}
     y_mapped = y.map(label_map).astype(int)
 
@@ -53,13 +53,51 @@ def train_lightgbm_classifier(
     X_values = X.to_numpy(dtype=np.float32)
     y_values = y_mapped.to_numpy()
 
-    X_train, y_train, X_val, y_val, X_test, y_test = time_series_split(
-        X_values,
-        y_values,
-    )
+    n = len(X_values)
+    train_size = 0.7
+    val_size = 0.15
+    train_end = int(n * train_size)
+    val_end = train_end + int(n * val_size)
 
-    train_set = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
-    val_set = lgb.Dataset(X_val, label=y_val, feature_name=feature_names)
+    X_train, y_train = X_values[:train_end], y_values[:train_end]
+    X_val, y_val = X_values[train_end:val_end], y_values[train_end:val_end]
+    X_test, y_test = X_values[val_end:], y_values[val_end:]
+
+    # ----- class weights via sample weights -----
+    # classes: 0=down, 1=flat, 2=up
+    unique, counts = np.unique(y_values, return_counts=True)
+    n_classes = len(unique)
+    total = len(y_values)
+
+    # inverse frequency weighting with extra boost for class 1 (flat)
+    base_weights = {c: total / (n_classes * cnt) for c, cnt in zip(unique, counts)}
+    # boost flat class (1)
+    boost_flat = 3.0
+    class_weight = {
+        0: base_weights.get(0, 1.0),
+        1: base_weights.get(1, 1.0) * boost_flat,
+        2: base_weights.get(2, 1.0),
+    }
+
+    sample_weights = np.array(
+        [class_weight[int(c)] for c in y_values], dtype=np.float32
+    )
+    w_train = sample_weights[:train_end]
+    w_val = sample_weights[train_end:val_end]
+    # (we don’t need weights on test for evaluation)
+
+    train_set = lgb.Dataset(
+        X_train,
+        label=y_train,
+        weight=w_train,
+        feature_name=feature_names,
+    )
+    val_set = lgb.Dataset(
+        X_val,
+        label=y_val,
+        weight=w_val,
+        feature_name=feature_names,
+    )
 
     params = {
         "objective": "multiclass",
@@ -72,7 +110,6 @@ def train_lightgbm_classifier(
         "bagging_freq": 5,
         "min_data_in_leaf": 50,
         "verbose": -1,
-        "class_weight": {0: 1.0, 1: 3.0, 2: 1.0},
     }
 
     print("Training LightGBM classifier...")
@@ -94,8 +131,10 @@ def train_lightgbm_classifier(
     y_proba = model.predict(X_test, num_iteration=model.best_iteration)
     y_pred = y_proba.argmax(axis=1)
 
-    print("Test classification report (labels 0:down, 1:flat, 2:up in y_test):")
-    print(classification_report(y_test, y_pred))
+    from sklearn.metrics import classification_report
+
+    print("Test classification report (labels 0=down,1=flat,2=up):")
+    print(classification_report(y_test, y_pred, digits=3))
 
     model_output.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(model_output))
