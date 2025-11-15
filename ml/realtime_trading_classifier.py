@@ -127,6 +127,7 @@ def kline_to_row(msg: dict) -> Tuple[pd.Timestamp, float, float, float, float, f
     v = float(k["v"])
     return ts, o, h, l, c, v
 
+
 def preload_history(
     config: LiveConfig,
     window: Deque[Tuple[pd.Timestamp, float, float, float, float, float]],
@@ -147,7 +148,9 @@ def preload_history(
 
     ex = ccxt.binance({"enableRateLimit": True})
 
-    logger.info(f"Preloading last {max_candles} candles for {symbol_ccxt} {config.interval}...")
+    logger.info(
+        f"Preloading last {max_candles} candles for {symbol_ccxt} {config.interval}..."
+    )
     try:
         ohlcv = ex.fetch_ohlcv(
             symbol_ccxt,
@@ -166,117 +169,10 @@ def preload_history(
         window.append((ts, float(o), float(h), float(l), float(c), float(v)))
         last_close = float(c)
 
-    logger.info(f"Preloaded {len(window)} candles, last ts={window[-1][0]} close={last_close}")
-    return last_close
-
-
-async def run_live__(config: LiveConfig) -> None:
-    import websockets  # type: ignore[import]
-
-    stream_name = f"{config.symbol}@kline_{config.interval}"
-    url = f"{config.ws_url}/{stream_name}"
-
-    model, feature_names = load_model_and_features(config)
-
-    window: Deque[Tuple[pd.Timestamp, float, float, float, float, float]] = deque(
-        maxlen=config.max_window
+    logger.info(
+        f"Preloaded {len(window)} candles, last ts={window[-1][0]} close={last_close}"
     )
-
-    print(f"Connecting to {url} ...")
-    async with websockets.connect(url) as ws:
-        print("Connected. Waiting for closed klines...")
-        async for message in ws:
-            data = json.loads(message)
-
-            if "k" not in data:
-                continue
-
-            k = data["k"]
-            if not k.get("x"):  # x == True ⇒ kline closed
-                continue
-
-            ts, o, h, l, c, v = kline_to_row(data)
-            window.append((ts, o, h, l, c, v))
-
-            if len(window) < config.min_history:
-                print(f"{ts} - warming up ({len(window)}/{config.min_history})")
-                continue
-
-            # build DF and indicators on full window
-            df = pd.DataFrame(
-                list(window),
-                columns=["timestamp", "open", "high", "low", "close", "volume"],
-            ).set_index("timestamp")
-
-            df_ind = add_indicators(df)
-            last_row = df_ind.iloc[-1]
-
-            if last_row.isna().any():
-                print(f"{ts} - indicators not ready, skipping.")
-                continue
-
-            # feature vector in same order as training
-            try:
-                X_live = (
-                    last_row[feature_names].to_numpy(dtype=np.float32).reshape(1, -1)
-                )
-            except KeyError as e:
-                missing = [str(e)]
-                print(f"{ts} - missing features in last_row: {missing}")
-                continue
-
-            proba = model.predict(X_live)[0]  # shape (3,)
-            p_down, p_flat, p_up = proba
-
-            # base position from classifier
-            raw_pos = proba_policy(proba, config.p_threshold, config.max_leverage)
-            pos = raw_pos
-
-            close_price = float(last_row["close"])
-            ema50 = float(last_row.get("ema_50", np.nan))
-            vol15 = float(last_row.get("vol_15m", np.nan))
-
-            trend_note = "neutral"
-            if not np.isnan(ema50):
-                if close_price > ema50 and raw_pos < 0:
-                    pos *= 0.5
-                    trend_note = "countertrend_short (halved)"
-                elif close_price < ema50 and raw_pos > 0:
-                    pos *= 0.5
-                    trend_note = "countertrend_long (halved)"
-                elif raw_pos != 0:
-                    trend_note = "with_trend"
-
-            # volatility filter: percentile over recent vol_15m
-            vol_note = "no_vol_filter"
-            if "vol_15m" in df_ind.columns and config.vol_percentile > 0:
-                vol_series = df_ind["vol_15m"].dropna()
-                if len(vol_series) > 50:
-                    vol_thr = np.nanpercentile(vol_series, config.vol_percentile)
-                    if not np.isnan(vol15) and vol15 < vol_thr:
-                        pos = 0.0
-                        vol_note = f"vol_low (< p{config.vol_percentile})"
-                    else:
-                        vol_note = f"vol_ok (>= p{config.vol_percentile})"
-
-            # map final pos → human-readable action / leverage
-            if pos > 0:
-                action = "BUY"
-                leverage = abs(pos)
-            elif pos < 0:
-                action = "SELL"
-                leverage = abs(pos)
-            else:
-                action = "HOLD"
-                leverage = 0.0
-
-            print(
-                f"{ts} | close={close_price:.2f} | "
-                f"P(down)={p_down:.3f}, P(flat)={p_flat:.3f}, P(up)={p_up:.3f} | "
-                f"raw_pos={raw_pos:+.2f}, final_pos={pos:+.2f} | "
-                f"trend={trend_note}, vol={vol_note} | "
-                f"signal: {action}, leverage={leverage:.2f}x, horizon={config.horizon_minutes}m"
-            )
+    return last_close
 
 
 async def run_live_once(config: LiveConfig, logger: logging.Logger) -> None:
@@ -353,6 +249,11 @@ async def run_live_once(config: LiveConfig, logger: logging.Logger) -> None:
 
             proba = model.predict(X_live)[0]  # [P(down), P(flat), P(up)]
             p_down, p_flat, p_up = proba
+
+            logger.info(
+                f"[DEBUG_PROBA] ts={ts} RAW_P = {proba} "
+                f"(down={proba[0]:.3f}, flat={proba[1]:.3f}, up={proba[2]:.3f})"
+            )
 
             raw_pos = proba_policy(proba, config.p_threshold, config.max_leverage)
             pos = raw_pos
