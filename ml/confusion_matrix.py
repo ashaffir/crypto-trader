@@ -47,8 +47,16 @@ feature_names = [l.strip() for l in features_path.read_text().splitlines() if l.
 X = df[feature_names].to_numpy(dtype=np.float32)
 y_dir = df["direction"].to_numpy()  # -1, 0, 1
 
-label_map = {-1: 0, 0: 1, 1: 2}
-y_true = np.vectorize(label_map.get)(y_dir)
+# Support both string labels ("down"/"flat"/"up") and numeric 0/1/2
+label_map = {"down": 0, "flat": 1, "up": 2}
+if df["direction"].dtype == "O":  # object -> likely strings
+    y_true = np.vectorize(label_map.get)(y_dir)
+else:
+    # already numeric 0/1/2
+    y_true = y_dir.astype(int)
+
+if np.isnan(y_true).any():
+    raise ValueError(f"Unmapped labels found in direction: {set(y_dir)}")
 
 model = lgb.Booster(model_file=str(model_path))
 proba = model.predict(X)  # (n, 3)
