@@ -45,9 +45,14 @@ def train_lightgbm_classifier(
     y: pd.Series,
     model_output: Path,
 ) -> None:
-    # Map labels {-1, 0, 1} → {0, 1, 2}
-    label_map = {-1: 0, 0: 1, 1: 2}
-    y_mapped = y.map(label_map).astype(int)
+    # Support old scheme (-1,0,1) and new (0,1,2)
+    if y.min() < 0:
+        # old: -1,0,1  -> 0,1,2
+        label_map = {-1: 0, 0: 1, 1: 2}
+        y_mapped = y.map(label_map).astype(int)
+    else:
+        # already 0,1,2
+        y_mapped = y.astype(int)
 
     feature_names: List[str] = list(X.columns)
     X_values = X.to_numpy(dtype=np.float32)
