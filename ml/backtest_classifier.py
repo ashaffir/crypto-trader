@@ -80,6 +80,7 @@ def backtest_classifier(
     vol_percentile: float,
     tp: float,
     sl: float,
+    return_dict: bool = False,
 ) -> None:
     n = len(df)
     if n < 3:
@@ -153,6 +154,7 @@ def backtest_classifier(
 
     pnl = positions * y_ret - costs
     equity = 1.0 + np.cumsum(pnl)
+    final_equity = float(equity[-1])
 
     valid_mask = ~np.isnan(pnl)
     pnl_valid = pnl[valid_mask]
@@ -192,6 +194,15 @@ def backtest_classifier(
     print(f"Trades: {n_trades}")
     print(f"Win rate: {win_rate:.2%}")
     print(f"Directional accuracy on traded steps: {dir_acc:.2%}")
+
+    if return_dict:
+        return {
+            "final_equity": final_equity,
+            "sharpe": sharpe,
+            "trades": n_trades,
+            "win_rate": win_rate,
+            "dir_acc": dir_acc,
+        }
 
 
 def main() -> None:
