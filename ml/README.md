@@ -3,7 +3,15 @@
 The computation is done on Google Colab.
 
 ### Prepare Data
-python prepare_data.py --symbol BTC/USDT --timeframe 1m --start 2023-01-01 --end 2023-03-01 --horizon 15 --output data/btcusdt_1m_2023_q1.parquet
+uv run prepare_data.py \
+  --symbol BTC/USDT \
+  --timeframe 1m \
+  --start 2025-06-01 \
+  --end 2025-11-01 \
+  --horizon 15 \
+  --thr 0.0007 \
+  --output data/btcusdt_1m_2025_q3.parquet
+
 
 ### Train Model
 python train_model.py --data data/btcusdt_1m_2023_q1.parquet --model_output models/lightgbm_btcusdt_1m.txt

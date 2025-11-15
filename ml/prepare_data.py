@@ -206,6 +206,12 @@ def main() -> None:
         default=15,
         help="Prediction horizon in minutes.",
     )
+    parser.add_argument(
+        "--thr",
+        type=float,
+        default=0.0007,
+        help="Threshold for direction labeling.",
+    )
 
     args = parser.parse_args()
 
@@ -230,7 +236,7 @@ def main() -> None:
     df_ind = add_indicators(ohlcv)
 
     print(f"Creating supervised dataset with horizon={args.horizon} minutes...")
-    dataset = create_supervised(df_ind, horizon=args.horizon)
+    dataset = create_supervised(df_ind, horizon=args.horizon, thr=args.thr)
     print(f"Final dataset rows: {len(dataset)}")
 
     print(f"Saving dataset to {output_path} ...")
