@@ -45,26 +45,25 @@ def load_dataset_and_features(
 def proba_policy(
     proba: np.ndarray,
     p_threshold: float,
+    p_down_threshold: float,
     max_leverage: float,
 ) -> float:
     """
-    proba = [P(down), P(flat), P(up)] (matching label mapping 0,1,2)
+    Asymmetric thresholds:
 
-    - If max(P(up), P(down)) < p_threshold -> no trade
-    - Else go long/short with max_leverage in direction of higher prob
+      - go long if P(up)   > P(down) and P(up)   > p_up_threshold
+      - go short if P(down) > P(up)   and P(down) > p_down_threshold
+      - otherwise HOLD
     """
     p_down = float(proba[0])
     p_flat = float(proba[1])
     p_up = float(proba[2])
 
-    best_p = max(p_up, p_down)
-    if best_p < p_threshold:
-        return 0.0
-
-    if p_up > p_down:
+    if p_up > p_down and p_up > p_threshold:
         return max_leverage
-    else:
+    if p_down > p_up and p_down > p_down_threshold:
         return -max_leverage
+    return 0.0
 
 
 def backtest_classifier(
@@ -73,7 +72,8 @@ def backtest_classifier(
     X: np.ndarray,
     y_ret: np.ndarray,
     y_dir: np.ndarray,
-    p_threshold: float,
+    p_threshold: float,  # up threshold
+    p_down_threshold: float,  # NEW
     max_leverage: float,
     transaction_cost_bps: float,
     horizon_minutes: int,
@@ -101,7 +101,12 @@ def backtest_classifier(
         ema50 = df["ema_50"].to_numpy()
 
         for t in range(1, n):
-            raw_pos = proba_policy(proba_preds[t - 1], p_threshold, max_leverage)
+            raw_pos = proba_policy(
+                proba_preds[t - 1],
+                p_threshold,
+                p_down_threshold,
+                max_leverage,
+            )
 
             # default: no position if we don't have EMA yet
             if np.isnan(ema50[t]) or np.isnan(close[t]):
@@ -127,7 +132,9 @@ def backtest_classifier(
 
     else:
         for t in range(1, n):
-            positions[t] = proba_policy(proba_preds[t - 1], p_threshold, max_leverage)
+            positions[t] = proba_policy(
+                proba_preds[t - 1], p_threshold, p_down_threshold, max_leverage
+            )
 
     cost_per_unit = transaction_cost_bps / 10000.0
     costs = np.zeros(n, dtype=np.float32)
@@ -216,6 +223,12 @@ def main() -> None:
         help="Min(max(P(up), P(down))) to open a trade.",
     )
     parser.add_argument(
+        "--p_down_threshold",
+        type=float,
+        default=0.50,
+        help="Probability threshold for opening SHORT positions.",
+    )
+    parser.add_argument(
         "--max_leverage",
         type=float,
         default=3.0,
@@ -272,7 +285,8 @@ def main() -> None:
         X=X,
         y_ret=y_ret,
         y_dir=y_dir,
-        p_threshold=args.p_threshold,
+        p_threshold=args.p_threshold,  # up
+        p_down_threshold=args.p_down_threshold,  # down
         max_leverage=args.max_leverage,
         transaction_cost_bps=args.transaction_cost_bps,
         horizon_minutes=args.horizon_minutes,
