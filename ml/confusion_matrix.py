@@ -1,12 +1,45 @@
-from pathlib import Path
+"""to runt this script, use:
+python ml/confusion_matrix.py \
+    --data_path data/supervised_dataset.parquet \
+    --model_path models/lightgbm_classifier.txt \
+    --features_path models/lightgbm_classifier.features.txt
+    
+This will print the confusion matrix and classification report for the trained model on the dataset."""
+
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+import argparse
+from pathlib import Path
 from sklearn.metrics import confusion_matrix, classification_report
 
-data_path = Path("data/btcusdt_1m_2025_q3.parquet")
-model_path = Path("models/lightgbm_direction_btcusdt_1m.txt")
-features_path = Path("models/lightgbm_direction_btcusdt_1m.features.txt")
+argparser = argparse.ArgumentParser(
+    description="Evaluate LightGBM classifier on direction prediction."
+)
+
+argparser.add_argument(
+    "--data_path",
+    type=Path,
+    required=True,
+    help="Path to the dataset parquet file.",
+)
+argparser.add_argument(
+    "--model_path",
+    type=Path,
+    required=True,
+    help="Path to the trained LightGBM model file.",
+)
+argparser.add_argument(
+    "--features_path",
+    type=Path,
+    required=True,
+    help="Path to the feature names text file.",
+)
+args = argparser.parse_args()
+
+data_path = args.data_path
+model_path = args.model_path
+features_path = args.features_path
 
 df = pd.read_parquet(data_path)
 feature_names = [l.strip() for l in features_path.read_text().splitlines() if l.strip()]
