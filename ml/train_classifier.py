@@ -69,13 +69,11 @@ def train_lightgbm_classifier(
     n_classes = len(unique)
     total = len(y_values)
 
-    # inverse frequency weighting with extra boost for class 1 (flat)
+    # simple inverse-frequency weighting (no extra boost)
     base_weights = {c: total / (n_classes * cnt) for c, cnt in zip(unique, counts)}
-    # boost flat class (1)
-    boost_flat = 3.0
     class_weight = {
         0: base_weights.get(0, 1.0),
-        1: base_weights.get(1, 1.0) * boost_flat,
+        1: base_weights.get(1, 1.0),
         2: base_weights.get(2, 1.0),
     }
 
