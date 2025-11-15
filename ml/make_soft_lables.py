@@ -7,10 +7,15 @@ import pandas as pd
 
 
 def add_direction_labels(df: pd.DataFrame, thr: float) -> pd.DataFrame:
-    if "future_return" not in df.columns:
-        raise ValueError("Input parquet must contain 'future_return' column.")
+    # use the existing future_ret column
+    if "future_ret" not in df.columns:
+        raise ValueError("Input parquet must contain 'future_ret' column.")
 
-    fr = df["future_return"].values
+    fr = df["future_ret"].values
+
+    # drop old direction if it exists, we'll replace it
+    if "direction" in df.columns:
+        df = df.drop(columns=["direction"])
 
     # 0 = down, 1 = flat, 2 = up
     direction = np.where(
